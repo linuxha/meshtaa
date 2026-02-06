@@ -1,0 +1,45 @@
+[meshtastic]
+# Serial port for Meshtastic device (usually /dev/ttyUSB0 or /dev/ttyACM0)
+serial_port = /dev/ttyUSB0
+
+# Baud rate for serial communication
+baudrate = 115200
+
+# Your Meshtastic node ID (required - get this from your device)
+# You can find this using meshtastic --info
+node_id = 
+
+[mqtt]
+# MQTT broker settings
+broker = localhost
+port = 1883
+
+# MQTT authentication (optional)
+username = 
+password = 
+
+# Connection keepalive in seconds
+keepalive = 60
+
+[daemon]
+# Log file location
+log_file = /var/log/meshvm.log
+
+# Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+log_level = INFO
+
+# PID file location
+pid_file = /var/run/meshvm.pid
+
+# Chat history file location (Markdown format)
+history_file = /var/log/meshvm_history.md
+
+[keywords]
+# Keyword to MQTT topic mapping
+# Format: keyword = mqtt/topic/path
+weather = sensors/weather
+status = system/status
+temp = sensors/temperature
+ping = system/ping
+battery = system/battery
+uptime = system/uptime
