@@ -611,9 +611,10 @@ class MeshVMDaemon:
     5. Handle signals for graceful shutdown
     """
     
-    def __init__(self, config_path: str = "/etc/meshvm/meshvm.conf"):
-        """Initialize daemon with configuration file path"""
+    def __init__(self, config_path: str = "/etc/meshvm/meshvm.conf", foreground: bool = False):
+        """Initialize daemon with configuration file path and foreground mode flag"""
         self.config = MeshVMConfig(config_path)
+        self.foreground = foreground
         self.logger = None  # Logger instance (initialized in setup_logging)
         self.mqtt_manager = None  # MQTTManager instance
         self.meshtastic_monitor = None  # MeshtasticMonitor instance
@@ -625,10 +626,10 @@ class MeshVMDaemon:
     
     def setup_logging(self):
         """
-        Setup logging configuration with file and console output
+        Setup logging configuration with file output and optional console output
         
-        Creates log directory if needed and configures both file and console logging
-        with appropriate formatting and log levels from configuration.
+        Creates log directory if needed and configures file logging always.
+        Console logging is only enabled in foreground mode.
         """
         log_file = os.path.expanduser(self.config.get('daemon', 'log_file'))
         log_level = self.config.get('daemon', 'log_level', 'INFO')
@@ -637,14 +638,16 @@ class MeshVMDaemon:
         log_dir = Path(log_file).parent
         log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Configure logging with file and console handlers
+        # Setup handlers based on foreground mode
+        handlers = [logging.FileHandler(log_file)]
+        if self.foreground:
+            handlers.append(logging.StreamHandler(sys.stdout))
+        
+        # Configure logging
         logging.basicConfig(
             level=getattr(logging, log_level.upper()),
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=handlers
         )
         
         self.logger = logging.getLogger('MeshVM')
@@ -654,6 +657,50 @@ class MeshVMDaemon:
         """Handle termination signals for graceful shutdown"""
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.stop()
+    
+    def daemonize(self):
+        """
+        Daemonize the process by detaching from the terminal
+        
+        This method performs the standard Unix daemon double-fork to completely
+        detach the process from the controlling terminal.
+        """
+        if self.foreground:
+            return  # Skip daemonization in foreground mode
+            
+        try:
+            # First fork
+            pid = os.fork()
+            if pid > 0:
+                sys.exit(0)  # Parent exits
+        except OSError as e:
+            sys.stderr.write(f"First fork failed: {e}\n")
+            sys.exit(1)
+        
+        # Decouple from parent environment
+        os.chdir("/")
+        os.setsid()
+        os.umask(0)
+        
+        try:
+            # Second fork
+            pid = os.fork()
+            if pid > 0:
+                sys.exit(0)  # Second parent exits
+        except OSError as e:
+            sys.stderr.write(f"Second fork failed: {e}\n")
+            sys.exit(1)
+        
+        # Redirect standard file descriptors
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        with open(os.devnull, 'r') as devnull_r:
+            os.dup2(devnull_r.fileno(), sys.stdin.fileno())
+        
+        with open(os.devnull, 'w') as devnull_w:
+            os.dup2(devnull_w.fileno(), sys.stdout.fileno())
+            os.dup2(devnull_w.fileno(), sys.stderr.fileno())
     
     def create_pid_file(self):
         """
@@ -697,6 +744,9 @@ class MeshVMDaemon:
             Exception: If any component fails to initialize or connect
         """
         try:
+            # Daemonize before setting up logging if not in foreground mode
+            self.daemonize()
+            
             self.setup_logging()
             self.logger.info(f"Starting MeshVM daemon v{__version__}")
             
@@ -797,14 +847,15 @@ def main():
         print(f"Run with --create-config to create a sample configuration at {args.config}")
         return 1
     
-    daemon = MeshVMDaemon(args.config)
+    daemon = MeshVMDaemon(args.config, foreground=args.foreground)
     
     try:
         daemon.start()
     except KeyboardInterrupt:
         daemon.stop()
     except Exception as e:
-        print(f"Daemon failed: {e}")
+        if args.foreground:
+            print(f"Daemon failed: {e}")
         return 1
     
     return 0
