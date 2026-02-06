@@ -118,10 +118,13 @@ nano ~/meshvm-test/meshvm.conf
 
 #### Run in foreground for testing:
 ```bash
-# Run with your test config
+# Run with your test config in foreground mode (shows console output)
 ./meshvm.py --config /home/njc/meshvm-test/meshvm.conf --foreground
 
-# You should see output like:
+# Run in daemon mode (silent background operation)
+./meshvm.py --config /home/njc/meshvm-test/meshvm.conf
+
+# You should see output like this only in foreground mode:
 # 2026-02-05 14:30:15,123 - MeshVM - INFO - Starting MeshVM daemon v0.1.0
 # 2026-02-05 14:30:15,124 - MeshVM - INFO - Logging initialized
 # 2026-02-05 14:30:15,125 - MeshVM - INFO - Connecting to MQTT broker localhost:1883
@@ -130,6 +133,8 @@ nano ~/meshvm-test/meshvm.conf
 # 2026-02-05 14:30:16,200 - MeshVM - INFO - Connected to Meshtastic node ID: 123456789
 # 2026-02-05 14:30:16,201 - MeshVM - INFO - Chat history logging to: ~/meshvm-test/history.md
 # 2026-02-05 14:30:16,202 - MeshVM - INFO - Starting message monitoring
+
+# In daemon mode (without --foreground), the process runs silently in background
 ```
 
 ## Testing Message Processing
