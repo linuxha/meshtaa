@@ -116,8 +116,8 @@ class MeshVMConfig:
         Returns:
             Dictionary of {keyword: mqtt_topic} mappings from config [keywords] section
         """
-        if self.config.has_section('keywords'):
-            return dict(self.config.items('keywords'))
+        if self.config.config.has_section('keywords'):
+            return dict(self.config.config.items('keywords'))
         return {}
     
     def create_sample_config(self):
