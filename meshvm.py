@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 import sys
 import os
@@ -92,6 +92,7 @@ class MeshVMConfig:
         self.config.set('daemon', 'log_level', 'INFO')
         self.config.set('daemon', 'pid_file', '/var/run/meshvm.pid')
         self.config.set('daemon', 'history_file', '/var/log/meshvm_history.md')
+        self.config.set('daemon', 'message_topic', 'meshvm/send')  # Topic for sending messages via MQTT
         
         self.config.add_section('keywords')
         self.config.set('keywords', 'weather', 'sensors/weather')
@@ -162,6 +163,7 @@ class MQTTManager:
         self.connected = False
         self.topic_cache = {}  # Cache: {topic: {payload: str, timestamp: float}}
         self.cache_timeout = 300  # Cache expiration: 5 minutes
+        self.message_callback = None  # Callback for message sending requests
         
         # Setup MQTT client callbacks for connection lifecycle
         self.client.on_connect = self._on_connect
@@ -218,6 +220,11 @@ class MQTTManager:
             for keyword, topic in keywords.items():
                 result, mid = client.subscribe(topic)
                 self.logger.info(f"MQTT Subscribed - Topic: '{topic}', Keyword: '{keyword}', Result: {result}")
+            
+            # Subscribe to message sending topic
+            message_topic = self.config.get('daemon', 'message_topic', 'meshvm/send')
+            result, mid = client.subscribe(message_topic)
+            self.logger.info(f"MQTT Subscribed - Message Topic: '{message_topic}', Result: {result}")
         else:
             self.logger.error(f"Failed to connect to MQTT broker {broker}:{port}, return code {rc}")
     
@@ -247,6 +254,12 @@ class MQTTManager:
         topic = msg.topic
         payload = msg.payload.decode('utf-8')
         timestamp = time.time()
+        
+        # Check if this is a message sending request
+        message_topic = self.config.get('daemon', 'message_topic', 'meshvm/send')
+        if topic == message_topic:
+            self._handle_message_request(payload)
+            return
         
         # Store message in cache with timestamp for expiration handling
         self.topic_cache[topic] = {
@@ -292,6 +305,49 @@ class MQTTManager:
         
         self.logger.debug(f"MQTT Cache Miss - Server: {broker}:{port}, Topic: '{topic}', Cache size: {len(self.topic_cache)}")
         return None
+    
+    def set_message_callback(self, callback):
+        """Set callback function for handling message sending requests"""
+        self.message_callback = callback
+    
+    def _handle_message_request(self, payload: str):
+        """
+        Handle message sending request from MQTT topic
+        
+        Expected format: <MAC_ADDRESS>@<MESSAGE>
+        Example: 10:20:BA:75:9C:D8@Hi there
+        
+        Args:
+            payload: MQTT message payload in format MAC@message
+        """
+        try:
+            if '@' not in payload:
+                self.logger.warning(f"Message format invalid - missing '@' separator: {payload}")
+                return
+            
+            mac_addr, message = payload.split('@', 1)  # Split on first @ only
+            mac_addr = mac_addr.strip().upper()
+            message = message.strip()
+            
+            if not message:
+                self.logger.warning(f"Empty message content for MAC {mac_addr}")
+                return
+            
+            # Validate MAC address format
+            if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_addr):
+                self.logger.warning(f"Invalid MAC address format: {mac_addr}")
+                return
+            
+            self.logger.info(f"Message Send Request - MAC: {mac_addr}, Message: '{message}'")
+            
+            # Convert MAC to node ID and send via callback
+            if self.message_callback:
+                self.message_callback(mac_addr, message)
+            else:
+                self.logger.warning("No message callback registered - cannot send message")
+                
+        except Exception as e:
+            self.logger.error(f"Error processing message request '{payload}': {e}")
 
 
 class MeshtasticMonitor:
@@ -316,6 +372,9 @@ class MeshtasticMonitor:
         self.my_node_id = None  # This node's numeric ID
         self.running = False  # Monitor thread control flag
         self.history_file = None  # Chat history log file path
+        
+        # Register callback for MQTT message sending requests
+        self.mqtt_manager.set_message_callback(self._handle_mqtt_message_request)
     
     def _setup_history_logging(self):
         """
@@ -502,7 +561,7 @@ class MeshtasticMonitor:
         self.running = False
         self.logger.info("Stopping message monitoring")
     
-    def _on_receive_message(self, packet):
+    def _on_receive_message(self, packet, interface=None):
         """
         Handle received Meshtastic message from pub/sub system
         
@@ -516,6 +575,7 @@ class MeshtasticMonitor:
         
         Args:
             packet: Meshtastic message packet dictionary
+            interface: Meshtastic interface instance (optional, provided by pubsub)
         """
 
         self.logger.debug(f"xxx on_Received message")
@@ -685,6 +745,29 @@ class MeshtasticMonitor:
                     
         except Exception as e:
             self.logger.error(f"Failed to send response: {e}")
+    
+    def _handle_mqtt_message_request(self, mac_address: str, message: str):
+        """
+        Handle message sending request from MQTT
+        
+        Args:
+            mac_address: MAC address in format XX:XX:XX:XX:XX:XX
+            message: Message text to send
+        """
+        try:
+            # Convert MAC address to node ID
+            node_id = self._mac_to_node_id(mac_address)
+            
+            self.logger.info(f"Sending MQTT-requested message to MAC {mac_address} (Node: {node_id}): {message}")
+            
+            # Send the message using existing response method
+            self._send_response(message, node_id)
+            
+            # Log to history
+            self._log_to_history("mqtt_send", node_id, f"MQTT Request: {mac_address}@{message}", message)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to send MQTT-requested message to {mac_address}: {e}")
 
 
 class MeshVMDaemon:
