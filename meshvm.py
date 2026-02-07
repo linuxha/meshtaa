@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 import sys
 import os
