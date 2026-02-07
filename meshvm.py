@@ -19,10 +19,10 @@ Architecture:
 
 Author: Senior Software Engineer
 Date: February 2026
-Version: 0.4.0
+Version: 0.4.1
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 import sys
 import os
@@ -216,7 +216,7 @@ class MQTTManager:
             
             for keyword, topic in keywords.items():
                 result, mid = client.subscribe(topic)
-                self.logger.debug(f"MQTT Subscribe - Server: {broker}:{port}, Topic: '{topic}', Keyword: '{keyword}', Result: {result}, MID: {mid}")
+                self.logger.info(f"MQTT Subscribed - Topic: '{topic}', Keyword: '{keyword}', Result: {result}")
         else:
             self.logger.error(f"Failed to connect to MQTT broker {broker}:{port}, return code {rc}")
     
@@ -253,6 +253,7 @@ class MQTTManager:
             'timestamp': timestamp
         }
         
+        self.logger.info(f"MQTT Data Updated - Topic: '{topic}', Payload: '{payload[:50]}...', Cache size: {len(self.topic_cache)}")
         self.logger.debug(f"MQTT Message Received - Server: {broker}:{port}, Topic: '{topic}', Payload: '{payload[:100]}...', Cache size: {len(self.topic_cache)}")
     
     def get_topic_data(self, topic: str) -> Optional[str]:
