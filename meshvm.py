@@ -19,16 +19,17 @@ Architecture:
 
 Author: Senior Software Engineer
 Date: February 2026
-Version: 0.4.1
+Version: 0.5.0
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 import sys
 import os
 import time
 import json
 import logging
+import re
 import signal
 import threading
 import configparser
@@ -368,6 +369,40 @@ class MeshtasticMonitor:
         except Exception as e:
             self.logger.error(f"Failed to log to history file: {e}")
     
+    def _mac_to_node_id(self, mac_address):
+        """Convert MAC address to Meshtastic node ID.
+        
+        Takes the last 4 octets of a MAC address, removes colons,
+        and converts to a hex string for use as node_id.
+        
+        Example: CE:6E:13:A3:20:93 -> !13a32093
+        
+        Args:
+            mac_address: MAC address string (e.g., "CE:6E:13:A3:20:93")
+            
+        Returns:
+            str: Node ID in hex format (e.g., "!13a32093")
+            
+        Raises:
+            ValueError: If MAC address format is invalid
+        """
+        # Remove any whitespace and convert to uppercase
+        mac_clean = mac_address.replace(' ', '').upper()
+        
+        # Validate MAC address format
+        if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_clean):
+            raise ValueError(f"Invalid MAC address format: {mac_address}")
+        
+        # Split into octets and take the last 4
+        octets = mac_clean.split(':')
+        last_four = octets[-4:]
+        
+        # Join without colons and convert to lowercase
+        node_hex = ''.join(last_four).lower()
+        
+        self.logger.info(f"Converted MAC {mac_address} -> node_id: !{node_hex}")
+        return f"!{node_hex}"
+    
     def connect(self):
         """
         Connect to Meshtastic device via serial interface
@@ -403,6 +438,13 @@ class MeshtasticMonitor:
                 configured_id = self.config.get('meshtastic', 'node_id')
                 if configured_id:
                     self.logger.info(f"Node ID - Config format from file: {configured_id}")
+                    
+                    # Check if it's a MAC address format (XX:XX:XX:XX:XX:XX)
+                    if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', configured_id.strip()):
+                        self.logger.info(f"Detected MAC address format: {configured_id}")
+                        configured_id = self._mac_to_node_id(configured_id.strip())
+                        self.logger.info(f"Converted to node_id format: {configured_id}")
+                    
                     # Handle hex format (e.g., !146b40f5) or decimal
                     if configured_id.startswith('!'):
                         self.my_node_id = int(configured_id[1:], 16)

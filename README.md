@@ -105,7 +105,7 @@ Edit `/etc/meshvm/meshvm.conf`:
 ```ini
 [meshtastic]
 serial_port = /dev/ttyUSB0
-node_id = 123456789  # Your actual node ID
+node_id = CE:6E:13:A3:20:93  # MAC address format (or use !13a32093 or 329457811)
 
 [mqtt]
 broker = localhost
@@ -199,7 +199,10 @@ Lookup MQTT Data → Send Response
 ### Meshtastic Section
 - `serial_port`: Device path (usually /dev/ttyUSB0)
 - `baudrate`: Serial baud rate (default: 115200)
-- `node_id`: Your Meshtastic node ID (required)
+- `node_id`: Your Meshtastic node ID (supports multiple formats):
+  - **Decimal format**: `123456789`
+  - **Hex format**: `!146b40f5`
+  - **MAC address format**: `CE:6E:13:A3:20:93` (uses last 4 octets → `!13a32093`)
 
 ### MQTT Section
 - `broker`: MQTT broker hostname/IP
