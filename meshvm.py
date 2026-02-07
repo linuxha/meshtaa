@@ -19,10 +19,10 @@ Architecture:
 
 Author: Senior Software Engineer
 Date: February 2026
-Version: 0.1.2
+Version: 0.4.0
 """
 
-__version__ = "0.1.2"
+__version__ = "0.4.0"
 
 import sys
 import os
@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Any
 try:
     import serial
     import paho.mqtt.client as mqtt
+
     from meshtastic.serial_interface import SerialInterface
     from meshtastic import mesh_pb2
     from meshtastic.protobuf import portnums_pb2
@@ -46,7 +47,7 @@ except ImportError as e:
     print(f"Required dependency missing: {e}")
     print("Install with: pip install pyserial paho-mqtt meshtastic")
     sys.exit(1)
-
+#
 
 class MeshVMConfig:
     """
@@ -116,8 +117,8 @@ class MeshVMConfig:
         Returns:
             Dictionary of {keyword: mqtt_topic} mappings from config [keywords] section
         """
-        if self.config.config.has_section('keywords'):
-            return dict(self.config.config.items('keywords'))
+        if self.config.has_section('keywords'):
+            return dict(self.config.items('keywords'))
         return {}
     
     def create_sample_config(self):
@@ -392,17 +393,25 @@ class MeshtasticMonitor:
             node_info = self.interface.getMyNodeInfo()
             if node_info:
                 self.my_node_id = node_info.get('num')
-                self.logger.info(f"Connected to Meshtastic node ID: {self.my_node_id}")
+                hex_format = f"!{self.my_node_id:08x}"
+                self.logger.info(f"Connected to Meshtastic device")
+                self.logger.info(f"Node ID - Config format (hex): {hex_format}")
+                self.logger.info(f"Node ID - Internal format (decimal): {self.my_node_id}")
             else:
                 # Fallback to configured node ID
                 configured_id = self.config.get('meshtastic', 'node_id')
                 if configured_id:
+                    self.logger.info(f"Node ID - Config format from file: {configured_id}")
                     # Handle hex format (e.g., !146b40f5) or decimal
                     if configured_id.startswith('!'):
                         self.my_node_id = int(configured_id[1:], 16)
+                        self.logger.info(f"Node ID - Converted from hex format")
                     else:
                         self.my_node_id = int(configured_id)
-                    self.logger.info(f"Using configured node ID: {self.my_node_id}")
+                        self.logger.info(f"Node ID - Using decimal format from config")
+                    hex_format = f"!{self.my_node_id:08x}"
+                    self.logger.info(f"Node ID - Config format (hex): {hex_format}")
+                    self.logger.info(f"Node ID - Internal format (decimal): {self.my_node_id}")
                 else:
                     raise Exception("Could not determine node ID")
             
@@ -465,16 +474,19 @@ class MeshtasticMonitor:
         Args:
             packet: Meshtastic message packet dictionary
         """
+
+        self.logger.debug(f"xxx on_Received message")
+
         try:
             # Validate packet format
             if not isinstance(packet, dict):
                 return
             
             # Extract sender and destination info
-            from_id = packet.get('from', 0)
-            to_id = packet.get('to', 0)
+            from_id     = packet.get('from', 0)
+            to_id       = packet.get('to', 0)
             from_id_str = packet.get('fromId', '')
-            to_id_str = packet.get('toId', '')
+            to_id_str   = packet.get('toId', '')
             
             # Check if message is for us (compare numeric IDs)
             if to_id != self.my_node_id:
@@ -485,6 +497,7 @@ class MeshtasticMonitor:
             
             # Extract message content
             decoded = packet.get('decoded', {})
+            self.logger.info(f"xxx Received yyy");
             if not decoded:
                 return
             
@@ -494,10 +507,21 @@ class MeshtasticMonitor:
             if portnum != 'TEXT_MESSAGE_APP':
                 return
                 
-            # Get the text content
-            message_text = decoded.get('text', '')
-            if not message_text:
+            # Get the text content from payload field
+            message_payload = decoded.get('payload')
+            tmsg_payload    = decoded.get('text')
+
+            self.logger.debug(f"xxx Received message: {message_payload} {tmsg_payload}")
+            self.logger.info(f"xxx Received message: {message_payload} {tmsg_payload}")
+
+            if not message_payload:
                 return
+                
+            # Handle both string and bytes payload
+            if isinstance(message_payload, bytes):
+                message_text = message_payload.decode('utf-8', errors='ignore')
+            else:
+                message_text = str(message_payload)
                 
             message_text_lower = message_text.strip().lower()
             sender_id = from_id_str if from_id_str else f'!{from_id:08x}'
@@ -569,9 +593,10 @@ class MeshtasticMonitor:
             
         Process:
         1. Convert destination ID from string to integer format
-        2. Send message using Meshtastic interface
-        3. Log successful transmission
-        4. Handle and log any transmission errors
+        2. Split message into 150 character chunks for Meshtastic compatibility
+        3. Send messages using Meshtastic interface with delays between chunks
+        4. Log successful transmission
+        5. Handle and log any transmission errors
         """
         try:
             # Convert destination_id from string format back to int if needed
@@ -580,9 +605,33 @@ class MeshtasticMonitor:
             else:
                 dest_id = destination_id
             
-            self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {message}")
-            self.interface.sendText(message, destinationId=dest_id)
-            self.logger.info(f"Sent response to {destination_id}: {message}")
+            # Split message into chunks of 150 characters
+            chunks = []
+            remaining = message
+            while len(remaining) > 150:
+                chunks.append(remaining[:150])
+                remaining = remaining[150:]
+            if remaining:
+                chunks.append(remaining)
+            
+            # Send each chunk with a small delay between messages
+            for i, chunk in enumerate(chunks):
+                if len(chunks) > 1:
+                    prefix = f"({i+1}/{len(chunks)}) "
+                    # Adjust chunk size to account for prefix
+                    max_chunk_size = 150 - len(prefix)
+                    if len(chunk) > max_chunk_size:
+                        chunk = chunk[:max_chunk_size]
+                    chunk = prefix + chunk
+                
+                self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {chunk}")
+                self.interface.sendText(chunk, destinationId=dest_id)
+                self.logger.info(f"Sent response to {destination_id}: {chunk}")
+                
+                # Add delay between messages to avoid overwhelming the mesh
+                if i < len(chunks) - 1:
+                    time.sleep(5)
+                    
         except Exception as e:
             self.logger.error(f"Failed to send response: {e}")
 

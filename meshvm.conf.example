@@ -7,6 +7,7 @@ baudrate = 115200
 
 # Your Meshtastic node ID (required - get this from your device)
 # You can find this using meshtastic --info
+# Supports both hex format (!146b40f5) or decimal format (342573301)
 node_id = 
 
 [mqtt]

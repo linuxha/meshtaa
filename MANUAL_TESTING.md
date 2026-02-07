@@ -118,8 +118,7 @@ nano ~/meshvm-test/meshvm.conf
 
 #### Run in foreground for testing:
 ```bash
-# Run with your test config in foreground mode (shows console output)
-./meshvm.py --config /home/njc/meshvm-test/meshvm.conf --foreground
+# Run with your test config in foregrouuse t-config /home/njc/meshvm-test/meshvm.conf --foreground
 
 # Run in daemon mode (silent background operation)
 ./meshvm.py --config /home/njc/meshvm-test/meshvm.conf
