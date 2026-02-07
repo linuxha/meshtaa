@@ -1,8 +1,24 @@
-# MeshVM - Meshtastic Virtual Machine Daemon
+# Meshtaa - Meshtastic Auto Answer Daemon
 
-A Linux daemon that monitors Meshtastic messages via serial port and responds with data from MQTT topics.
+This is what happens when to 'vide code'. I'll let the AI fix the renaming of the code from meshvm to meshtaa later.
 
-## Features
+Meshtaa is a serial port monitor that watches for certain keywords to be sent by individual users to this Meshtastic node. It will not monitor a broadcast and respond. I've chosen to use local MQTT topics to hold the keyword responses. This allows me to use cron or manual topic updates to provide information.
+
+# "Vibe Coding"
+
+Initially I named this application meshvm (meshtastic voice mail). And then let Copilot and Claude go and write Python code to talk to a serially attached Meshtastic node (RAK4631). Claude renamed it Meshtastic Virtual Machine Daemon, which is very wrong. This was an ill omen of things to come! ;-)
+
+I have a paid, Github Copilot Pro account and I'm using the Claude AI.
+
+Things started off okay but when I went to test the initial code it would work only if it was in VS Code with Claude running the code. Once I manually ran the code it was fail to reply. After a lot of back and forth, various patches with Claude actually getting frustrate (it said so), I went into debug mode and finally found the last bug, the reply message was too long (221 characters). We fixed that and here's what we have.
+
+I'd like to note that when Claude is working and making sense it seems to work well. But when it gets off track it starts going Jr. Programmer and using the shotgun fix-it/diagnostics approach. Not exactly halucinations but not good programming practices (I've not taken advantage of the AI md files here). Letting the AI do it's think without feedback and control is a bad idea. Fortunately I'm running as a regular user so it couldn't do much real damage except to the code base. I still need to look over the code better but it appears to be technically correct and working now.
+
+And for those who are wondering, yes I could have written this code without the AI but I'm trying to learn what are the limits and strengths of the AI. I've seen the AI do wonders and in a short time. I've also seen it get frustrated and fallback to the shotgun approach of diagnostics. Not what I expected. I still have a lot to learn but this has been interesting.
+
+Now the rest of this file is pretty much AI written. I need to go through it but I have used half of it so it is technically sound.
+
+## Features (my requirements)
 
 - **Serial Port Monitoring**: Monitors Meshtastic device via serial connection
 - **Message Filtering**: Only processes messages directed to your specific node ID
@@ -37,7 +53,7 @@ A Linux daemon that monitors Meshtastic messages via serial port and responds wi
 - Meshtastic device connected via USB/Serial
 - MQTT broker (local or remote)
 
-### Quick Install
+### Quick Install (not tested)
 
 1. Clone or download the MeshVM files
 2. Run the installation script as root:
@@ -161,6 +177,10 @@ Generate a sample configuration file:
 
 ### Example Interaction
 
+A user can send a message directly to the Meshtastic node. A broadcast message will not work.
+
+Appears to not be case sensitive.
+
 ```
 User sends: "Hey, what's the weather?"
 MeshVM sees: "weather" keyword
@@ -207,6 +227,8 @@ MeshVM subscribes to MQTT topics and caches received data for keyword responses.
 4. **Data Freshness**: MeshVM caches MQTT data for 5 minutes by default - ensure your publishing frequency matches your needs
 
 ### Example External Data Sources
+
+Be careful with the message size. Meshtastic has a limit on the number of characters you can send. It is dependent on the radio presets. For long/fast this is less that 200 characters.
 
 ```bash
 # Weather monitoring script (cron every 10 minutes)
@@ -292,7 +314,9 @@ The codebase is modular:
 
 ## License
 
-Open source - modify and distribute as needed.
+GPL 3.0 - Open source - modify and distribute as needed.
+
+I'm a bit uncertain as to which Open Source License to use. At the moment I've chosen GPL 3.0.
 
 ## Support
 
