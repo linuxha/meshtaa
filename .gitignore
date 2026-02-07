@@ -50,3 +50,8 @@ t
 # Backup files
 *.bak
 *.backup
+
+# Local
+meshvm.conf
+meshvm_history.md
+

@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 import sys
 import os
@@ -636,7 +636,7 @@ class MeshtasticMonitor:
             
         Process:
         1. Convert destination ID from string to integer format
-        2. Split message into 150 character chunks for Meshtastic compatibility
+        2. Split message into chunks accounting for multi-part prefixes
         3. Send messages using Meshtastic interface with delays between chunks
         4. Log successful transmission
         5. Handle and log any transmission errors
@@ -648,28 +648,36 @@ class MeshtasticMonitor:
             else:
                 dest_id = destination_id
             
-            # Split message into chunks of 150 characters
+            # First, determine if we need multi-part messages and calculate prefix length
+            # Estimate how many parts we'll need for proper prefix calculation
+            estimated_parts = (len(message) + 149) // 150  # Round up division
+            if estimated_parts > 1:
+                # Calculate prefix length: "(X/Y) " where X and Y are the part numbers
+                prefix_len = len(f"({estimated_parts}/{estimated_parts}) ")
+                max_chunk_size = 150 - prefix_len
+            else:
+                max_chunk_size = 150
+            
+            # Split message into properly sized chunks accounting for prefixes
             chunks = []
             remaining = message
-            while len(remaining) > 150:
-                chunks.append(remaining[:150])
-                remaining = remaining[150:]
+            while len(remaining) > max_chunk_size:
+                chunks.append(remaining[:max_chunk_size])
+                remaining = remaining[max_chunk_size:]
             if remaining:
                 chunks.append(remaining)
             
-            # Send each chunk with a small delay between messages
+            # Send each chunk with appropriate prefix
             for i, chunk in enumerate(chunks):
                 if len(chunks) > 1:
                     prefix = f"({i+1}/{len(chunks)}) "
-                    # Adjust chunk size to account for prefix
-                    max_chunk_size = 150 - len(prefix)
-                    if len(chunk) > max_chunk_size:
-                        chunk = chunk[:max_chunk_size]
-                    chunk = prefix + chunk
+                    final_message = prefix + chunk
+                else:
+                    final_message = chunk
                 
-                self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {chunk}")
-                self.interface.sendText(chunk, destinationId=dest_id)
-                self.logger.info(f"Sent response to {destination_id}: {chunk}")
+                self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {final_message}")
+                self.interface.sendText(final_message, destinationId=dest_id)
+                self.logger.info(f"Sent response to {destination_id}: {final_message}")
                 
                 # Add delay between messages to avoid overwhelming the mesh
                 if i < len(chunks) - 1:
