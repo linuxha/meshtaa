@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 import sys
 import os
@@ -553,6 +553,13 @@ class MeshtasticMonitor:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.logger.info("Monitoring interrupted")
+        except Exception as e:
+            # Handle unexpected errors during monitoring
+            self.logger.error(f"Monitoring error: {e}")
+            # Continue running unless explicitly stopped
+            if self.running:
+                self.logger.info("Continuing monitoring despite error...")
+                time.sleep(5)  # Brief pause before continuing
         finally:
             self.running = False
     
@@ -639,9 +646,13 @@ class MeshtasticMonitor:
             self._log_to_history("received", sender_id, original_message, response)
             
         except Exception as e:
-            self.logger.error(f"Error processing received message: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+            # Handle protobuf decode errors and other message processing issues
+            if "DecodeError" in str(type(e)) or "protobuf" in str(e).lower():
+                self.logger.warning(f"Meshtastic protobuf decode error (radio interference/signal issue): {e}")
+            else:
+                self.logger.error(f"Error processing received message: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
     
     def _process_keywords(self, message: str, sender_id: str) -> Optional[str]:
         """
