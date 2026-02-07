@@ -315,6 +315,37 @@ The codebase is modular:
 - `MeshtasticMonitor`: Serial monitoring and message processing
 - `MeshVMDaemon`: Main daemon orchestration
 
+## Version History
+
+### v0.6.1 - Radio Interference Resilience
+- Enhanced protobuf DecodeError handling to treat as warnings instead of errors
+- Added monitoring loop exception recovery to continue operation despite intermittent failures
+- Maintains daemon stability when Meshtastic radio experiences signal/interference issues
+- Prevents unnecessary error logging for known communication degradation scenarios
+
+### v0.6.0 - MQTT Remote Messaging
+- Added remote messaging capability via MQTT using MAC@message format
+- Supports sending messages to Meshtastic nodes from external MQTT clients
+- Enhanced message validation and error handling for remote requests
+- Configurable message_topic setting for remote message publishing
+
+### v0.5.2 - Pubsub Interface Compatibility
+- Fixed interface parameter mismatch in pubsub callback signature
+- Improved compatibility with Meshtastic library pubsub interface
+- Enhanced error logging for interface-related issues
+
+### v0.5.1 - Message Chunking Fix
+- Fixed character loss bug in message chunking algorithm
+- Resolved issue where multi-part messages were missing characters
+- Improved prefix length calculation before message splitting
+- Enhanced message integrity for long responses
+
+### v0.5.0 - Initial Release
+- Basic serial port monitoring and message processing
+- MQTT integration with topic caching
+- Keyword-based auto-response system
+- Daemon operation with systemd integration
+
 ## License
 
 GPL 3.0 - Open source - modify and distribute as needed.
