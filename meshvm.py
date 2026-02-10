@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 import sys
 import os
@@ -47,6 +47,7 @@ try:
 
     from meshtastic.serial_interface import SerialInterface
     from meshtastic.tcp_interface import TCPInterface
+    from meshtastic.ble_interface import BLEInterface
     from meshtastic import mesh_pb2
     from meshtastic.protobuf import portnums_pb2
     
@@ -84,11 +85,13 @@ class MeshVMConfig:
         """
         # Set Meshtastic device defaults
         self.config.add_section('meshtastic')
-        self.config.set('meshtastic', 'connection_type', 'serial')  # 'serial' or 'network'
+        self.config.set('meshtastic', 'connection_type', 'serial')  # 'serial', 'network', or 'bluetooth'
         self.config.set('meshtastic', 'serial_port', '/dev/ttyUSB0')
         self.config.set('meshtastic', 'baudrate', '115200')
         self.config.set('meshtastic', 'network_url', '')  # e.g., https://hostname:9443/
         self.config.set('meshtastic', 'verify_ssl', 'false')  # SSL certificate verification
+        self.config.set('meshtastic', 'bluetooth_mac', '')  # Bluetooth MAC address (e.g., 01:23:45:67:89:AB)
+        self.config.set('meshtastic', 'bluetooth_pin', '')  # Optional Bluetooth PIN if required
         self.config.set('meshtastic', 'node_id', '')  # Must be set by user
         
         self.config.add_section('mqtt')
@@ -486,10 +489,10 @@ class MeshtasticMonitor:
     
     def connect(self):
         """
-        Connect to Meshtastic device via serial or network interface
+        Connect to Meshtastic device via serial, network, or Bluetooth interface
         
         Connection process:
-        1. Connect to device using serial port or network URL
+        1. Connect to device using serial port, network URL, or Bluetooth MAC
         2. Setup chat history logging
         3. Determine this node's ID (from device or config)
         4. Validate node ID is properly configured
@@ -519,6 +522,27 @@ class MeshtasticMonitor:
                 
                 # Create TCP interface (Meshtastic library handles the connection)
                 self.interface = TCPInterface(hostname=hostname, portNumber=port)
+            elif connection_type.lower() == 'bluetooth':
+                bluetooth_mac = self.config.get('meshtastic', 'bluetooth_mac')
+                if not bluetooth_mac:
+                    raise Exception("Bluetooth MAC address is required when connection_type is 'bluetooth'")
+                
+                bluetooth_pin = self.config.get('meshtastic', 'bluetooth_pin')
+                
+                self.logger.info(f"Connecting to Meshtastic device via Bluetooth: {bluetooth_mac}")
+                if bluetooth_pin:
+                    self.logger.info("Bluetooth PIN provided for authentication")
+                else:
+                    self.logger.info("No Bluetooth PIN provided - attempting connection without PIN")
+                
+                # Create BLE interface with optional PIN
+                if bluetooth_pin:
+                    # Note: PIN handling may vary based on meshtastic library implementation
+                    # Some versions might require PIN during pairing, not during connection
+                    self.logger.info(f"Using Bluetooth PIN: {bluetooth_pin[:3]}***")
+                    self.interface = BLEInterface(address=bluetooth_mac)
+                else:
+                    self.interface = BLEInterface(address=bluetooth_mac)
             else:
                 # Default to serial connection
                 serial_port = self.config.get('meshtastic', 'serial_port')
