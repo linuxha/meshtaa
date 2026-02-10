@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 
 import sys
 import os
@@ -38,12 +38,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 try:
-    import serial
+    import configparser
+    import logging.handlers
     import paho.mqtt.client as mqtt
+    import ssl
+    import urllib3
+    from urllib.parse import urlparse
 
     from meshtastic.serial_interface import SerialInterface
+    from meshtastic.tcp_interface import TCPInterface
     from meshtastic import mesh_pb2
     from meshtastic.protobuf import portnums_pb2
+    
+    # Disable SSL warnings for certificate verification bypass
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except ImportError as e:
     print(f"Required dependency missing: {e}")
     print("Install with: pip install pyserial paho-mqtt meshtastic")
@@ -76,8 +84,11 @@ class MeshVMConfig:
         """
         # Set Meshtastic device defaults
         self.config.add_section('meshtastic')
+        self.config.set('meshtastic', 'connection_type', 'serial')  # 'serial' or 'network'
         self.config.set('meshtastic', 'serial_port', '/dev/ttyUSB0')
         self.config.set('meshtastic', 'baudrate', '115200')
+        self.config.set('meshtastic', 'network_url', '')  # e.g., https://hostname:9443/
+        self.config.set('meshtastic', 'verify_ssl', 'false')  # SSL certificate verification
         self.config.set('meshtastic', 'node_id', '')  # Must be set by user
         
         self.config.add_section('mqtt')
@@ -333,8 +344,11 @@ class MQTTManager:
                 self.logger.warning(f"Empty message content for MAC {mac_addr}")
                 return
             
-            # Validate MAC address format
-            if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_addr):
+            # Validate MAC address format (allow broadcast addresses)
+            if mac_addr == '*' or mac_addr == 'FF:FF:FF:FF:FF:FF':
+                # Accept broadcast addresses
+                pass
+            elif not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_addr):
                 self.logger.warning(f"Invalid MAC address format: {mac_addr}")
                 return
             
@@ -433,20 +447,28 @@ class MeshtasticMonitor:
         
         Takes the last 4 octets of a MAC address, removes colons,
         and converts to a hex string for use as node_id.
+        Supports broadcast addresses '*' and 'FF:FF:FF:FF:FF:FF'.
         
         Example: CE:6E:13:A3:20:93 -> !13a32093
+                 * -> ^all
+                 FF:FF:FF:FF:FF:FF -> ^all
         
         Args:
-            mac_address: MAC address string (e.g., "CE:6E:13:A3:20:93")
+            mac_address: MAC address string (e.g., "CE:6E:13:A3:20:93") or broadcast ('*', 'FF:FF:FF:FF:FF:FF')
             
         Returns:
-            str: Node ID in hex format (e.g., "!13a32093")
+            str: Node ID in hex format (e.g., "!13a32093") or "^all" for broadcast
             
         Raises:
             ValueError: If MAC address format is invalid
         """
         # Remove any whitespace and convert to uppercase
         mac_clean = mac_address.replace(' ', '').upper()
+        
+        # Handle broadcast addresses
+        if mac_clean == '*' or mac_clean == 'FF:FF:FF:FF:FF:FF':
+            self.logger.info(f"Converted broadcast address {mac_address} -> node_id: ^all")
+            return "^all"
         
         # Validate MAC address format
         if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_clean):
@@ -464,10 +486,10 @@ class MeshtasticMonitor:
     
     def connect(self):
         """
-        Connect to Meshtastic device via serial interface
+        Connect to Meshtastic device via serial or network interface
         
         Connection process:
-        1. Connect to serial port using Meshtastic library
+        1. Connect to device using serial port or network URL
         2. Setup chat history logging
         3. Determine this node's ID (from device or config)
         4. Validate node ID is properly configured
@@ -476,10 +498,33 @@ class MeshtasticMonitor:
             Exception: If device connection fails or node ID cannot be determined
         """
         try:
-            serial_port = self.config.get('meshtastic', 'serial_port')
-            self.logger.info(f"Connecting to Meshtastic device on {serial_port}")
+            connection_type = self.config.get('meshtastic', 'connection_type', 'serial')
             
-            self.interface = SerialInterface(serial_port)
+            if connection_type.lower() == 'network':
+                network_url = self.config.get('meshtastic', 'network_url')
+                if not network_url:
+                    raise Exception("Network URL is required when connection_type is 'network'")
+                
+                # Parse the URL to extract hostname and port
+                parsed_url = urlparse(network_url)
+                hostname = parsed_url.hostname
+                port = parsed_url.port or (443 if parsed_url.scheme == 'https' else 80)
+                
+                self.logger.info(f"Connecting to Meshtastic device via network: {hostname}:{port}")
+                
+                # Configure SSL context to disable certificate verification if requested
+                verify_ssl = self.config.get('meshtastic', 'verify_ssl', 'false').lower() == 'true'
+                if not verify_ssl:
+                    self.logger.info("SSL certificate verification disabled")
+                
+                # Create TCP interface (Meshtastic library handles the connection)
+                self.interface = TCPInterface(hostname=hostname, portNumber=port)
+            else:
+                # Default to serial connection
+                serial_port = self.config.get('meshtastic', 'serial_port')
+                self.logger.info(f"Connecting to Meshtastic device via serial: {serial_port}")
+                
+                self.interface = SerialInterface(serial_port)
             
             # Setup history logging
             self._setup_history_logging()
