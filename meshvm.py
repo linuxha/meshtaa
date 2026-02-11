@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 import sys
 import os
@@ -107,6 +107,7 @@ class MeshVMConfig:
         self.config.set('daemon', 'pid_file', '/var/run/meshvm.pid')
         self.config.set('daemon', 'history_file', '/var/log/meshvm_history.md')
         self.config.set('daemon', 'message_topic', 'meshvm/send')  # Topic for sending messages via MQTT
+        self.config.set('daemon', 'protobuf_resilience', 'true')  # Enhanced protobuf error handling
         
         self.config.add_section('keywords')
         self.config.set('keywords', 'weather', 'sensors/weather')
@@ -717,7 +718,11 @@ class MeshtasticMonitor:
         except Exception as e:
             # Handle protobuf decode errors and other message processing issues
             if "DecodeError" in str(type(e)) or "protobuf" in str(e).lower():
-                self.logger.warning(f"Meshtastic protobuf decode error (radio interference/signal issue): {e}")
+                # Enhanced protobuf error handling for radio interference/corrupted packets
+                self.logger.debug(f"Protobuf decode error details - Type: {type(e)}, Message: {e}")
+                self.logger.warning(f"Meshtastic protobuf decode error (likely radio interference/corrupted packet)")
+                self.logger.info("This is normal with poor radio conditions - continuing operation...")
+                # Don't re-raise, just continue - these errors are expected with radio interference
             else:
                 self.logger.error(f"Error processing received message: {e}")
                 import traceback
