@@ -2,18 +2,18 @@
 """
 MeshVM - Meshtastic Virtual Machine Daemon
 
-A Linux daemon that monitors Meshtastic messages via serial port and responds with MQTT data.
+A Linux daemon that monitors Meshtastic messages via serial, network, or Bluetooth and responds with MQTT data.
 The daemon:
-- Connects to a Meshtastic device via serial port
+- Connects to a Meshtastic device via serial port, TCP/IP network, or Bluetooth Low Energy (BLE)
 - Monitors incoming TEXT messages directed to this node
 - Processes messages for configurable keywords
 - Retrieves cached data from MQTT topics
 - Sends responses back to the original message sender
 
 Architecture:
-    Meshtastic Device <--> SerialInterface <--> MeshtasticMonitor
-                                                        |
-    MQTT Broker <--> MQTTManager <--> MeshVMDaemon <----+
+    Meshtastic Device <--> SerialInterface/TCPInterface/BLEInterface <--> MeshtasticMonitor
+                                                                                  |
+    MQTT Broker <--> MQTTManager <--> MeshVMDaemon <----------------------------------+
                                            |
                                     Configuration
 
@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 
 import sys
 import os
@@ -90,9 +90,9 @@ class MeshVMConfig:
         self.config.set('meshtastic', 'baudrate', '115200')
         self.config.set('meshtastic', 'network_url', '')  # e.g., https://hostname:9443/
         self.config.set('meshtastic', 'verify_ssl', 'false')  # SSL certificate verification
-        self.config.set('meshtastic', 'bluetooth_mac', '')  # Bluetooth MAC address (e.g., 01:23:45:67:89:AB)
-        self.config.set('meshtastic', 'bluetooth_pin', '')  # Optional Bluetooth PIN if required
-        self.config.set('meshtastic', 'node_id', '')  # Must be set by user
+        self.config.set('meshtastic', 'bluetooth_mac', '')  # Bluetooth Low Energy MAC address (e.g., 01:23:45:67:89:AB)
+        self.config.set('meshtastic', 'bluetooth_pin', '')  # Optional Bluetooth PIN for pairing (rarely needed)
+        self.config.set('meshtastic', 'node_id', '')  # Must be set by user - hex format (!12345678) or MAC address
         
         self.config.add_section('mqtt')
         self.config.set('mqtt', 'broker', 'localhost')
@@ -300,6 +300,7 @@ class MQTTManager:
         2. Verify cache entry is not expired (5 minute timeout)
         3. Return payload if valid, remove if expired
         4. Log all cache operations for debugging
+        5. Check MQTT connection status when cache is expired/missing
         """
         broker = self.config.get('mqtt', 'broker')
         port = self.config.getint('mqtt', 'port', 1883)
@@ -317,9 +318,49 @@ class MQTTManager:
                 # Remove expired cache entry to free memory
                 self.logger.debug(f"MQTT Cache Expired - Topic: '{topic}', Age: {cache_age:.1f}s (timeout: {self.cache_timeout}s)")
                 del self.topic_cache[topic]
+                
+                # Check MQTT connection and re-subscribe to topic if disconnected
+                self._check_and_refresh_topic(topic)
         
-        self.logger.debug(f"MQTT Cache Miss - Server: {broker}:{port}, Topic: '{topic}', Cache size: {len(self.topic_cache)}")
+        # Check connection status when cache miss occurs
+        if not self.connected:
+            self.logger.warning(f"MQTT Cache Miss - Server: {broker}:{port}, Topic: '{topic}', MQTT connection lost - attempting reconnection")
+            self._attempt_reconnect()
+        else:
+            self.logger.debug(f"MQTT Cache Miss - Server: {broker}:{port}, Topic: '{topic}', Cache size: {len(self.topic_cache)}, Connection: OK")
+        
         return None
+    
+    def _check_and_refresh_topic(self, topic: str):
+        """
+        Check MQTT connection and re-subscribe to topic when cache expires
+        
+        Args:
+            topic: MQTT topic to refresh subscription for
+        """
+        if self.connected:
+            # Re-subscribe to the specific topic to ensure we get fresh data
+            result, mid = self.client.subscribe(topic)
+            self.logger.info(f"MQTT Topic Refresh - Re-subscribed to '{topic}', Result: {result}")
+        else:
+            self.logger.warning(f"MQTT Topic Refresh Failed - Topic: '{topic}', Connection lost")
+            
+    def _attempt_reconnect(self):
+        """
+        Attempt to reconnect to MQTT broker when connection is lost
+        """
+        try:
+            broker = self.config.get('mqtt', 'broker')
+            port = self.config.getint('mqtt', 'port', 1883)
+            self.logger.info(f"MQTT Reconnection Attempt - Server: {broker}:{port}")
+            
+            # Stop current loop and reconnect
+            self.client.loop_stop()
+            self.client.reconnect()
+            self.client.loop_start()
+            
+        except Exception as e:
+            self.logger.error(f"MQTT Reconnection Failed - Error: {e}")
     
     def set_message_callback(self, callback):
         """Set callback function for handling message sending requests"""
@@ -490,13 +531,24 @@ class MeshtasticMonitor:
     
     def connect(self):
         """
-        Connect to Meshtastic device via serial, network, or Bluetooth interface
+        Connect to Meshtastic device via serial, network, or Bluetooth Low Energy interface
+        
+        Connection Types:
+        - Serial: Direct USB/UART connection via serial port (most reliable)
+        - Network: TCP/IP connection over WiFi/Ethernet (requires device web interface)
+        - Bluetooth: BLE connection for mobile/wireless scenarios (requires BLE support)
         
         Connection process:
-        1. Connect to device using serial port, network URL, or Bluetooth MAC
-        2. Setup chat history logging
-        3. Determine this node's ID (from device or config)
-        4. Validate node ID is properly configured
+        1. Connect to device using configured connection type (serial/network/bluetooth)
+        2. Setup chat history logging to markdown file
+        3. Determine this node's ID from device info or config file
+        4. Validate node ID is properly configured for message filtering
+        
+        Bluetooth Notes:
+        - Uses Bluetooth Low Energy (BLE) not classic Bluetooth
+        - Requires bluetooth_mac setting with device's BLE MAC address
+        - PIN usually not required for modern devices (handled during initial pairing)
+        - May require device to be in pairing mode for first connection
         
         Raises:
             Exception: If device connection fails or node ID cannot be determined
@@ -530,20 +582,24 @@ class MeshtasticMonitor:
                 
                 bluetooth_pin = self.config.get('meshtastic', 'bluetooth_pin')
                 
-                self.logger.info(f"Connecting to Meshtastic device via Bluetooth: {bluetooth_mac}")
+                self.logger.info(f"Connecting to Meshtastic device via Bluetooth Low Energy (BLE): {bluetooth_mac}")
                 if bluetooth_pin:
-                    self.logger.info("Bluetooth PIN provided for authentication")
+                    self.logger.info("Bluetooth PIN provided for authentication (rarely needed for BLE)")
+                    self.logger.warning("Note: Most modern BLE devices handle pairing automatically")
                 else:
-                    self.logger.info("No Bluetooth PIN provided - attempting connection without PIN")
+                    self.logger.info("No Bluetooth PIN provided - using standard BLE connection (recommended)")
                 
-                # Create BLE interface with optional PIN
+                # Create BLE interface - PIN typically handled at OS pairing level, not application level
                 if bluetooth_pin:
-                    # Note: PIN handling may vary based on meshtastic library implementation
-                    # Some versions might require PIN during pairing, not during connection
-                    self.logger.info(f"Using Bluetooth PIN: {bluetooth_pin[:3]}***")
+                    # Note: PIN handling varies by meshtastic library version and device
+                    # Most BLE devices handle authentication at the OS bluetooth stack level
+                    # PIN parameter may be ignored by BLE interface implementation
+                    self.logger.info(f"Using Bluetooth PIN: {bluetooth_pin[:3]}*** (may be ignored by BLE stack)")
                     self.interface = BLEInterface(address=bluetooth_mac)
                 else:
                     self.interface = BLEInterface(address=bluetooth_mac)
+                
+                self.logger.info("BLE connection established - if connection fails, ensure device is paired with system Bluetooth")
             else:
                 # Default to serial connection
                 serial_port = self.config.get('meshtastic', 'serial_port')
@@ -762,8 +818,13 @@ class MeshtasticMonitor:
                     response = f"{keyword.title()}: {mqtt_data}"
                     self.logger.debug(f"MQTT Data Found - Keyword: '{keyword}', Topic: '{topic}', Data length: {len(mqtt_data)} chars")
                 else:
-                    response = f"{keyword.title()}: No data available"
-                    self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', Check MQTT broker and topic subscription")
+                    # Provide more specific error information
+                    if self.mqtt_manager.connected:
+                        response = f"{keyword.title()}: No recent data available (cache expired)"
+                        self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', Cache expired and no fresh data received")
+                    else:
+                        response = f"{keyword.title()}: Connection unavailable"
+                        self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', MQTT broker connection lost")
                 
                 # Send response back to the original message sender
                 self._send_response(response, sender_id)
