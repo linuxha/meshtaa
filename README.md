@@ -347,6 +347,16 @@ The codebase is modular:
 
 ## Version History
 
+### v0.8.2 - Cache Timeout Fix
+- Connection Status Checking: When cache expires or is missing, the system now checks if the MQTT connection is still active
+- Automatic Topic Refresh: When cache expires, the system re-subscribes to the specific topic to ensure fresh data reception
+- Connection Recovery: Added automatic reconnection attempts when MQTT connection is lost
+- Better Error Reporting: More specific error messages distinguish between "cache expired" and "connection lost" scenarios
+
+### v0.7.0 - Network and Bluetooth support
+- Adds Network (https) and Bluetooth support
+- Fixes versioning (v0.6.x -> v0.7.x)
+
 ### v0.6.2 - Maintenance Release
 - Patch version increment for repository synchronization
 - Maintenance release with no functional changes
