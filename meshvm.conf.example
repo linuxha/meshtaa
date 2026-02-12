@@ -1,13 +1,32 @@
 [meshtastic]
-# Serial port for Meshtastic device (usually /dev/ttyUSB0 or /dev/ttyACM0)
+# Connection type: serial, network, or bluetooth
+connection_type = serial
+
+# Serial port for Meshtastic device (when connection_type = serial)
+# Usually /dev/ttyUSB0 or /dev/ttyACM0 on Linux
 serial_port = /dev/ttyUSB0
 
 # Baud rate for serial communication
 baudrate = 115200
 
+# Network URL for TCP/IP connection (when connection_type = network)
+# Example: https://192.168.1.100:443 or http://meshtastic.local:4403
+network_url = 
+
+# SSL certificate verification for network connections
+verify_ssl = false
+
+# Bluetooth Low Energy MAC address (when connection_type = bluetooth)
+# Example: 01:23:45:67:89:AB
+# Find using: bluetoothctl devices
+bluetooth_mac = 
+
+# Bluetooth PIN (usually not needed for BLE - handled by OS pairing)
+bluetooth_pin = 
+
 # Your Meshtastic node ID (required - get this from your device)
 # You can find this using meshtastic --info
-# Supports both hex format (!146b40f5) or decimal format (342573301)
+# Supports hex format (!146b40f5), decimal format (342573301), or MAC address format
 node_id = 
 
 [mqtt]

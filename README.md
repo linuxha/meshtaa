@@ -20,7 +20,7 @@ Now the rest of this file is pretty much AI written. I need to go through it but
 
 ## Features (my requirements)
 
-- **Serial Port Monitoring**: Monitors Meshtastic device via serial connection
+- **Multi-Connection Support**: Connects to Meshtastic device via Serial, TCP/IP Network, or Bluetooth Low Energy (BLE)
 - **Message Filtering**: Only processes messages directed to your specific node ID
 - **Keyword Processing**: Responds to configurable keywords with MQTT topic data
 - **MQTT Integration**: Caches data from MQTT topics for quick responses
@@ -31,17 +31,17 @@ Now the rest of this file is pretty much AI written. I need to go through it but
 ## Architecture
 
 ```
-┌─────────────────┐    Serial     ┌─────────────────┐
-│   Meshtastic    │◄──────────────┤    MeshVM       │
-│     Device      │               │    Daemon       │
-└─────────────────┘               └─────────────────┘
-                                          │
-                                          │ MQTT
-                                          ▼
-                                  ┌─────────────────┐
-                                  │   MQTT Broker   │
-                                  │  (Topics/Data)  │
-                                  └─────────────────┘
+┌─────────────────┐  Serial/Network/BLE  ┌─────────────────┐
+│   Meshtastic    │◄─────────────────────┤    MeshVM       │
+│     Device      │                      │    Daemon       │
+└─────────────────┘                      └─────────────────┘
+                                                  │
+                                                  │ MQTT
+                                                  ▼
+                                          ┌─────────────────┐
+                                          │   MQTT Broker   │
+                                          │  (Topics/Data)  │
+                                          └─────────────────┘
 ```
 
 ## Installation
@@ -50,7 +50,10 @@ Now the rest of this file is pretty much AI written. I need to go through it but
 
 - Python 3.7+
 - Linux system with systemd
-- Meshtastic device connected via USB/Serial
+- Meshtastic device accessible via:
+  - USB/Serial port (most common)
+  - TCP/IP network connection (WiFi/Ethernet enabled devices)
+  - Bluetooth Low Energy (BLE-capable devices)
 - MQTT broker (local or remote)
 
 ### Quick Install (not tested)
@@ -100,10 +103,37 @@ Look for the "My info" section and note the node number.
 
 ### 2. Edit Configuration
 
-Edit `/etc/meshvm/meshvm.conf`:
+Edit `/etc/meshvm/meshvm.conf`. Choose your connection type:
 
+**Serial Connection (most common):**
 ```ini
 [meshtastic]
+connection_type = serial
+serial_port = /dev/ttyUSB0
+node_id = CE:6E:13:A3:20:93  # MAC address format (or use !13a32093 or 329457811)
+```
+
+**Network Connection (WiFi/Ethernet devices):**
+```ini
+[meshtastic]
+connection_type = network
+network_url = https://192.168.1.100:443
+verify_ssl = false
+node_id = CE:6E:13:A3:20:93
+```
+
+**Bluetooth Low Energy Connection:**
+```ini
+[meshtastic]
+connection_type = bluetooth
+bluetooth_mac = 01:23:45:67:89:AB  # Find with: bluetoothctl devices
+node_id = CE:6E:13:A3:20:93
+```
+
+**Complete configuration example:**
+```ini
+[meshtastic]
+connection_type = serial  # or 'network' or 'bluetooth'
 serial_port = /dev/ttyUSB0
 node_id = CE:6E:13:A3:20:93  # MAC address format (or use !13a32093 or 329457811)
 
