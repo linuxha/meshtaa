@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.8.3"
+__version__ = "0.8.4"
 
 import sys
 import os
@@ -807,21 +807,47 @@ class MeshtasticMonitor:
         
         # Process keywords in config order, respond to first match only
         for keyword, topic in keywords.items():
-            if keyword.lower() in message:
-                self.logger.info(f"Keyword '{keyword}' detected in message")
-                self.logger.debug(f"Keyword Match - Keyword: '{keyword}', Topic: '{topic}', Looking up MQTT data...")
+            # Check for #keyword pattern in the message
+            keyword_pattern = f"#{keyword.lower()}"
+            if keyword_pattern in message:
+                self.logger.info(f"Keyword pattern '{keyword_pattern}' detected in message")
+                self.logger.debug(f"Keyword Match - Pattern: '{keyword_pattern}', Topic: '{topic}', Looking up MQTT data...")
                 
-                # Retrieve cached MQTT data for this keyword's topic
+                # Retrieve cached MQTT data for this keyword's topic with retry logic
                 mqtt_data = self.mqtt_manager.get_topic_data(topic)
                 
                 if mqtt_data:
                     response = f"{keyword.title()}: {mqtt_data}"
                     self.logger.debug(f"MQTT Data Found - Keyword: '{keyword}', Topic: '{topic}', Data length: {len(mqtt_data)} chars")
                 else:
-                    # Provide more specific error information
+                    # Attempt to refresh topic data up to 3 times before giving up
                     if self.mqtt_manager.connected:
-                        response = f"{keyword.title()}: No recent data available (cache expired)"
-                        self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', Cache expired and no fresh data received")
+                        self.logger.info(f"MQTT data cache expired for '{topic}', attempting refresh (up to 3 tries)...")
+                        
+                        mqtt_data = None
+                        for attempt in range(1, 4):  # 3 attempts
+                            self.logger.debug(f"MQTT refresh attempt {attempt}/3 for topic '{topic}'")
+                            
+                            # Trigger topic refresh
+                            self.mqtt_manager._check_and_refresh_topic(topic)
+                            
+                            # Wait a bit for new data to arrive
+                            time.sleep(2)
+                            
+                            # Check if we got fresh data
+                            mqtt_data = self.mqtt_manager.get_topic_data(topic)
+                            if mqtt_data:
+                                self.logger.info(f"MQTT data refresh successful on attempt {attempt} for topic '{topic}'")
+                                break
+                            
+                            self.logger.debug(f"MQTT refresh attempt {attempt} failed for topic '{topic}', no fresh data received")
+                        
+                        if mqtt_data:
+                            response = f"{keyword.title()}: {mqtt_data}"
+                            self.logger.debug(f"MQTT Data Found After Refresh - Keyword: '{keyword}', Topic: '{topic}', Data length: {len(mqtt_data)} chars")
+                        else:
+                            response = f"{keyword.title()}: No recent data available (cache expired after 3 refresh attempts)"
+                            self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', Cache expired and no fresh data received after 3 refresh attempts")
                     else:
                         response = f"{keyword.title()}: Connection unavailable"
                         self.logger.warning(f"MQTT Data Missing - Keyword: '{keyword}', Topic: '{topic}', MQTT broker connection lost")

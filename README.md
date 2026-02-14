@@ -144,6 +144,8 @@ username = your_mqtt_user
 password = your_mqtt_password
 
 [keywords]
+# Keywords are configured without the # prefix
+# Users must include # when sending messages (e.g., "#weather", "#status")
 weather = sensors/outdoor/weather
 status = system/status
 temp = sensors/temperature/current
@@ -202,18 +204,18 @@ Generate a sample configuration file:
 1. **Startup**: Daemon connects to Meshtastic device via serial and MQTT broker
 2. **MQTT Monitoring**: Subscribes to all configured MQTT topics and caches data
 3. **Message Filtering**: Monitors all Meshtastic messages but only processes those directed to your node ID
-4. **Keyword Detection**: Scans incoming messages for configured keywords
-5. **Response**: When a keyword is found, retrieves cached MQTT data and sends response
+4. **Keyword Detection**: Scans incoming messages for configured keywords (must be prefixed with '#')
+5. **Response**: When a keyword is found, retrieves cached MQTT data with automatic retry logic and sends response
 
 ### Example Interaction
 
 A user can send a message directly to the Meshtastic node. A broadcast message will not work.
 
-Appears to not be case sensitive.
+Keywords must be prefixed with '#' and are case-insensitive.
 
 ```
-User sends: "Hey, what's the weather?"
-MeshVM sees: "weather" keyword
+User sends: "Hey, what's the #weather today?"
+MeshVM sees: "#weather" keyword pattern
 MeshVM responds: "Weather: Sunny, 22°C"
 ```
 
@@ -242,8 +244,10 @@ Lookup MQTT Data → Send Response
 
 ### Keywords Section
 - Format: `keyword = mqtt/topic/path`
+- Keywords must be prefixed with '#' in messages (e.g., "#weather", "#status")
 - Keywords are case-insensitive
 - First matching keyword wins
+- Automatic MQTT topic refresh with 3 retry attempts when cache expires
 
 ### Daemon Section
 - `log_file`: Log file path
@@ -300,6 +304,7 @@ mosquitto_pub -h localhost -t "sensors/temperature" -r -m "CPU: $TEMP"
 4. **No Responses to Keywords**
    - Check MQTT topics have data
    - Verify keyword spelling in config
+   - **Ensure keywords are prefixed with '#' in messages** (e.g., "#weather")
    - Check message is directed to your node ID
 
 ### Debug Mode
@@ -346,6 +351,12 @@ The codebase is modular:
 - `MeshVMDaemon`: Main daemon orchestration
 
 ## Version History
+
+### v0.8.4 - Enhanced Keyword Processing and Retry Logic
+- **Keyword Format Change**: Keywords now require '#' prefix (e.g., "#weather", "#status")
+- **MQTT Retry Logic**: Automatic topic refresh with up to 3 retry attempts when cache expires
+- **Better Reliability**: System now attempts to refresh expired MQTT data before reporting unavailability
+- **Enhanced Logging**: Detailed logging of retry attempts and refresh operations
 
 ### v0.8.2 - Cache Timeout Fix
 - Connection Status Checking: When cache expires or is missing, the system now checks if the MQTT connection is still active
