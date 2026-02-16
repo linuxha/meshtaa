@@ -22,7 +22,7 @@ Date: February 2026
 Version: 0.5.0
 """
 
-__version__ = "0.8.4"
+__version__ = "0.8.5"
 
 import sys
 import os
@@ -1095,13 +1095,13 @@ class MeshVMDaemon:
         6. Connect to Meshtastic device
         7. Start message monitoring loop
         
+        Note: Daemonization is now handled in main() before this method is called
+        to avoid multi-threading issues with fork().
+        
         Raises:
             Exception: If any component fails to initialize or connect
         """
         try:
-            # Daemonize before setting up logging if not in foreground mode
-            self.daemonize()
-            
             self.setup_logging()
             self.logger.info(f"Starting MeshVM daemon v{__version__}")
             
@@ -1124,7 +1124,10 @@ class MeshVMDaemon:
             self.meshtastic_monitor.start_monitoring()
             
         except Exception as e:
-            self.logger.error(f"Failed to start daemon: {e}")
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Failed to start daemon: {e}")
+            else:
+                sys.stderr.write(f"Failed to start daemon: {e}\n")
             self.stop()  # Clean up any partial initialization
             raise
     
@@ -1170,8 +1173,9 @@ def main():
     1. Parse command line arguments
     2. Handle special modes (config creation, version)
     3. Validate configuration file exists and is valid
-    4. Initialize and start daemon
-    5. Handle any startup errors gracefully
+    4. Daemonize early if not in foreground mode (before any threads are created)
+    5. Initialize and start daemon
+    6. Handle any startup errors gracefully
     """
     import argparse
     
@@ -1202,6 +1206,44 @@ def main():
         print(f"Run with --create-config to create a sample configuration at {args.config}")
         return 1
     
+    # Daemonize early before creating any objects that might spawn threads
+    # This prevents the "multi-threaded process fork()" warning
+    if not args.foreground:
+        try:
+            # First fork
+            pid = os.fork()
+            if pid > 0:
+                sys.exit(0)  # Parent exits
+        except OSError as e:
+            sys.stderr.write(f"First fork failed: {e}\n")
+            sys.exit(1)
+        
+        # Decouple from parent environment
+        os.chdir("/")
+        os.setsid()
+        os.umask(0)
+        
+        try:
+            # Second fork
+            pid = os.fork()
+            if pid > 0:
+                sys.exit(0)  # Second parent exits
+        except OSError as e:
+            sys.stderr.write(f"Second fork failed: {e}\n")
+            sys.exit(1)
+        
+        # Redirect standard file descriptors
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        with open(os.devnull, 'r') as devnull_r:
+            os.dup2(devnull_r.fileno(), sys.stdin.fileno())
+        
+        with open(os.devnull, 'w') as devnull_w:
+            os.dup2(devnull_w.fileno(), sys.stdout.fileno())
+            os.dup2(devnull_w.fileno(), sys.stderr.fileno())
+    
+    # Now create the daemon object after daemonization is complete
     daemon = MeshVMDaemon(args.config, foreground=args.foreground)
     
     try:

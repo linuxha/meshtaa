@@ -174,6 +174,17 @@ Run in foreground mode for testing:
 sudo /usr/local/bin/meshvm --foreground
 ```
 
+Additional
+```bash
+# python3 -m venv .venv #(One time)
+# pip3 install pyserial paho-mqtt meshtastic (One time)
+source .venv/bin/activate
+# Run in the foreground
+python3 ./meshvm.py -f -c t/meshvm.conf
+#pkill -f "meshvm.py"
+deactivate
+```
+
 ### Production
 
 Enable and start the daemon:
@@ -351,6 +362,12 @@ The codebase is modular:
 - `MeshVMDaemon`: Main daemon orchestration
 
 ## Version History
+
+### v0.8.5 - Daemon Threading Fix
+- **Threading Issue Fix**: Resolved "multi-threaded process fork()" DeprecationWarning
+- **Daemon Stability**: Moved daemonization earlier in startup process before thread creation
+- **Process Management**: Improved daemon startup sequence to prevent threading conflicts
+- **Error Handling**: Enhanced error handling for daemon startup failures
 
 ### v0.8.4 - Enhanced Keyword Processing and Retry Logic
 - **Keyword Format Change**: Keywords now require '#' prefix (e.g., "#weather", "#status")
