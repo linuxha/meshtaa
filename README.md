@@ -23,7 +23,10 @@ Now the rest of this file is pretty much AI written. I need to go through it but
 - **Multi-Connection Support**: Connects to Meshtastic device via Serial, TCP/IP Network, or Bluetooth Low Energy (BLE)
 - **Message Filtering**: Only processes messages directed to your specific node ID
 - **Keyword Processing**: Responds to configurable keywords with MQTT topic data
+- **User Greeting System**: Automatically greets new users who send broadcast messages (configurable format, 5-minute cache)
+- **ID Filtering System**: Control which nodes the bot interacts with using allowlists or blocklists
 - **MQTT Integration**: Caches data from MQTT topics for quick responses
+- **Remote Message Sending**: Send messages via MQTT using MAC@message format
 - **Daemon Operation**: Runs as a proper Linux daemon with systemd integration
 - **Comprehensive Logging**: Detailed logging with configurable levels
 - **Configuration Management**: Flexible configuration file support
@@ -179,6 +182,8 @@ Additional
 # python3 -m venv .venv #(One time)
 # pip3 install pyserial paho-mqtt meshtastic (One time)
 source .venv/bin/activate
+# User needs to create this script to make sure MQTT topics are filled
+bash ./t/mqtt-filler,sh
 # Run in the foreground
 python3 ./meshvm.py -f -c t/meshvm.conf
 #pkill -f "meshvm.py"
@@ -264,6 +269,60 @@ Lookup MQTT Data → Send Response
 - `log_file`: Log file path
 - `log_level`: DEBUG, INFO, WARNING, ERROR, CRITICAL
 - `pid_file`: PID file location
+- `message_topic`: MQTT topic for remote message sending (default: meshvm/send)
+- `greeting_enabled`: Enable/disable auto-greeting new users (true/false)
+- `greeting_format`: Customizable greeting message format with variables:
+  - `{node_id}`: Full node ID (e.g., '!12345678')
+  - `{node_id_short}`: Node ID without '!' prefix (e.g., '12345678')
+  - `{bot_id}`: This bot's node ID
+
+**Greeting Examples:**
+```ini
+# Default greeting
+greeting_format = Hello {node_id}! Welcome to the mesh network!
+
+# Personalized greeting
+greeting_format = Welcome {node_id_short}! I'm bot {bot_id} 
+
+# Simple greeting
+greeting_format = New user {node_id} detected - hello from the mesh!
+```
+
+**Note**: Each user is greeted only once per 5-minute cache period to prevent spam.
+
+### ID Filtering Configuration
+Control which nodes the bot will interact with using filtering options:
+
+```ini
+[daemon]
+filter_mode = none        # Filtering mode: none, allowlist, blocklist
+filter_ids = ID1,ID2,ID3  # Comma-separated list of IDs to filter
+```
+
+**Supported ID formats:**
+- **Hex node IDs**: `!12345678`, `!abcdef01`
+- **MAC addresses**: `AA:BB:CC:DD:EE:FF`, `10:20:30:40:50:60`
+- **Decimal IDs**: `305419896`, `2882400001`
+
+**Filter modes:**
+- `none`: No filtering (default) - respond to all users
+- `allowlist`: Only respond to IDs in filter_ids list
+- `blocklist`: Ignore IDs in filter_ids list, respond to everyone else
+
+**Example configurations:**
+```ini
+# Block specific troublemakers
+filter_mode = blocklist
+filter_ids = !deadbeef, AA:BB:CC:DD:EE:FF, 305419896
+
+# Only respond to authorized users
+filter_mode = allowlist  
+filter_ids = !12345678, !87654321, 10:20:30:40:50:60
+
+# No filtering (respond to everyone)
+filter_mode = none
+filter_ids =
+```
 
 ## MQTT Data Management
 
@@ -292,6 +351,129 @@ mosquitto_pub -h localhost -t "system/status" -r -m "$STATUS"
 TEMP=$(sensors | grep 'Package id 0' | awk '{print $4}')
 mosquitto_pub -h localhost -t "sensors/temperature" -r -m "CPU: $TEMP"
 ```
+
+## Transmitting Messages to Meshtastic Nodes
+
+MeshVM supports sending messages to Meshtastic nodes via MQTT. This allows external applications, scripts, or users to send messages through the Meshtastic mesh network using standard MQTT clients.
+
+### Message Format
+
+Messages are sent to the MQTT topic configured as `message_topic` (default: `meshvm/send_message`) using this format:
+
+```
+<MAC_ADDRESS>@<MESSAGE>
+```
+
+Where:
+- `MAC_ADDRESS`: The target Meshtastic node's MAC address in format `XX:XX:XX:XX:XX:XX`
+- `MESSAGE`: The text message to send
+- `@`: Separator between MAC address and message
+
+### Sending Messages with mosquitto_pub
+
+#### Send to a Specific Node
+
+```bash
+# Send message to a specific Meshtastic node
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "CE:6E:13:A3:20:93@Hello from MQTT!"
+
+# Send status request
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "10:20:BA:75:9C:D8@Please send your #status"
+
+# Send multiple commands
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "AA:BB:CC:DD:EE:FF@Can you tell me the #weather and #temp?"
+```
+
+#### Broadcast to All Nodes
+
+To send a message to all nodes on the mesh network, use either `*` or `FF:FF:FF:FF:FF:FF` as the MAC address:
+
+```bash
+# Broadcast using asterisk (recommended)
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "*@Emergency broadcast: All stations check in"
+
+# Broadcast using broadcast MAC address
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "FF:FF:FF:FF:FF:FF@Network maintenance in 10 minutes"
+
+# Broadcast a general announcement
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "*@Weekly mesh net starting now. Please join!"
+```
+
+### Message Length Limitations
+
+⚠️ **Important**: Meshtastic has message length limitations that vary by radio preset:
+- **Long/Fast presets**: ~200 characters maximum
+- **Medium/Slow presets**: Even shorter limits
+
+Long messages are automatically split into multiple parts with prefixes like `(1/3)`, `(2/3)`, `(3/3)`.
+
+### Configuration
+
+Ensure your `meshvm.conf` includes the message topic configuration:
+
+```ini
+[mqtt]
+broker = localhost
+port = 1883
+message_topic = meshvm/send_message  # Topic for remote message requests
+```
+
+### Examples for Different Use Cases
+
+#### Remote Monitoring and Control
+
+```bash
+# Request status from a remote station
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "12:34:56:78:9A:BC@Please send #battery and #status"
+
+# Send configuration change notification
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "*@Configuration updated. Restart recommended."
+```
+
+#### Automated Alerting
+
+```bash
+#!/bin/bash
+# Script example: Send weather alerts to all nodes
+ALERT="Severe weather warning: High winds expected 8-10 PM. Secure equipment."
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "*@$ALERT"
+```
+
+#### Integration with Home Automation
+
+```bash
+# Home Assistant automation example
+# Send doorbell notifications to mesh network
+mosquitto_pub -h localhost -t "meshvm/send_message" -m "*@Visitor at front door - $(date '+%H:%M')"
+
+# Send temperature alerts to specific monitoring stations
+if [ $(cat /tmp/temp) -gt 35 ]; then
+    mosquitto_pub -h localhost -t "meshvm/send_message" -m "AA:BB:CC:DD:EE:FF@High temperature alert: $(cat /tmp/temp)°C"
+fi
+```
+
+### Finding Node MAC Addresses
+
+To find MAC addresses of Meshtastic nodes in your network:
+
+1. **From Meshtastic CLI**: `meshtastic --nodes`
+2. **From device logs**: Check MeshVM history file for sender MAC addresses
+3. **From network scans**: Use Bluetooth or network discovery tools
+4. **Physical labels**: Many devices have MAC addresses printed on labels
+
+### Error Handling
+
+If a MAC address format is invalid or the target node is unreachable:
+- Invalid formats will be logged as errors
+- Messages to unreachable nodes may timeout silently
+- Check MeshVM logs for transmission confirmations and errors
+
+### Security Considerations
+
+- Anyone with access to your MQTT broker can send messages through your Meshtastic node
+- Consider using MQTT authentication (`username`/`password`) in production
+- Monitor the message topic for unauthorized usage
+- Be aware that broadcast messages are visible to all mesh network participants
 
 ## Troubleshooting
 

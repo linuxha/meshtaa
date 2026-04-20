@@ -54,6 +54,32 @@ pid_file = /var/run/meshvm.pid
 # Chat history file location (Markdown format)
 history_file = /var/log/meshvm_history.md
 
+# MQTT topic for remote message sending (publish MAC@message format)
+message_topic = meshvm/send
+
+# Enhanced protobuf error handling for poor radio conditions
+protobuf_resilience = true
+
+# User greeting configuration
+# Enable/disable greeting new users who send broadcast messages
+greeting_enabled = true
+
+# Greeting message format with placeholders:
+# {node_id} = Full node ID (e.g., '!12345678')
+# {node_id_short} = Node ID without '!' (e.g., '12345678')
+# {bot_id} = This bot's node ID
+greeting_format = Hello {node_id}! Welcome to the mesh network!
+
+# ID filtering configuration
+# Control which users the bot will interact with
+filter_mode = none
+
+# Filter ID list (comma-separated)
+# Supports: hex (!12345678), MAC (AA:BB:CC:DD:EE:FF), decimal (305419896)
+# Examples:
+# filter_ids = !deadbeef, AA:BB:CC:DD:EE:FF, 305419896
+filter_ids =
+
 [keywords]
 # Keyword to MQTT topic mapping
 # Format: keyword = mqtt/topic/path
