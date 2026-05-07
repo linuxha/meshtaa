@@ -1,14 +1,14 @@
 [Unit]
-Description=MeshVM - Meshtastic Virtual Machine Daemon
-Documentation=man:meshvm(1)
+Description=Meshtaa - Meshtastic Auto Answer Daemon
+Documentation=man:meshtaa(1)
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-User=meshvm
-Group=meshvm
-ExecStart=/usr/local/bin/meshvm --config /etc/meshvm/meshvm.conf
+User=meshtaa
+Group=meshtaa
+ExecStart=/usr/local/bin/meshtaa --config /etc/meshtaa/meshtaa.conf
 Restart=always
 RestartSec=10
 

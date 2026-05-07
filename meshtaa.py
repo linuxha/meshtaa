@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MeshVM - Meshtastic Virtual Machine Daemon
+Meshtaa - Meshtastic Auto Answer Daemon
 
 A Linux daemon that monitors Meshtastic messages via serial, network, or Bluetooth and responds with MQTT data.
 The daemon:
@@ -14,13 +14,13 @@ The daemon:
 Architecture:
     Meshtastic Device <--> SerialInterface/TCPInterface/BLEInterface <--> MeshtasticMonitor
                                                                                   |
-    MQTT Broker <--> MQTTManager <--> MeshVMDaemon <----------------------------------+
+    MQTT Broker <--> MQTTManager <--> MeshtaaDaemon <----------------------------------+
                                            |
                                     Configuration
 
 Message Publishing:
     You can send messages to Meshtastic nodes by publishing to the configured 'message_topic'.
-    Default topic: 'meshvm/send' (configurable in [daemon] section)
+    Default topic: 'meshtaa/send' (configurable in [daemon] section)
     
     Message Format: <MAC_ADDRESS>@<MESSAGE>
     - MAC_ADDRESS: Target node's MAC address in format XX:XX:XX:XX:XX:XX
@@ -30,24 +30,24 @@ Message Publishing:
     Examples using mosquitto_pub:
     
     # Send direct message to a specific node
-    mosquitto_pub -h mqtt.example.com -t "meshvm/send" \\
+    mosquitto_pub -h mqtt.example.com -t "meshtaa/send" \\
                   -m "10:20:BA:75:9C:D8@Hello from MQTT!"
     
     # Send broadcast message to all nodes
-    mosquitto_pub -h mqtt.example.com -t "meshvm/send" \\
+    mosquitto_pub -h mqtt.example.com -t "meshtaa/send" \\
                   -m "*@Network announcement: System maintenance in 5 minutes"
     
     # With authentication
     mosquitto_pub -h mqtt.example.com -u username -P password \\
-                  -t "meshvm/send" \\
+                  -t "meshtaa/send" \\
                   -m "AA:BB:CC:DD:EE:FF@Status update from server"
     
     # Monitor the message topic (for debugging)
-    mosquitto_sub -h mqtt.example.com -t "meshvm/send" -v
+    mosquitto_sub -h mqtt.example.com -t "meshtaa/send" -v
 
 Greeting Configuration:
-    MeshVM can automatically greet new users who send broadcast messages on the mesh network.
-    Configure greeting behavior in the [daemon] section of meshvm.conf:
+    Meshtaa can automatically greet new users who send broadcast messages on the mesh network.
+    Configure greeting behavior in the [daemon] section of meshtaa.conf:
     
     [daemon]
     greeting_enabled = true                                   # Enable/disable greeting feature
@@ -66,8 +66,9 @@ Greeting Configuration:
     Note: Each user is greeted only once per 5-minute cache period to prevent spam.
 
 ID Filtering:
-    Configure user filtering to control which nodes the bot will interact with.
-    Useful for blocking spam or limiting responses to authorized users only.
+    Configure user filtering to control which nodes the bot will interact with for broadcast messages.
+    Useful for blocking spam or limiting responses to authorized users only for public broadcasts.
+    Note: Direct messages to this node are NEVER filtered - only broadcast message responses are filtered.
     
     [daemon]
     filter_mode = none        # Filtering mode: none, allowlist, blocklist
@@ -78,26 +79,26 @@ ID Filtering:
     - MAC addresses:   AA:BB:CC:DD:EE:FF, 10:20:30:40:50:60
     - Decimal IDs:     305419896, 2882400001
     
-    Filter modes:
-    - none:      No filtering (default) - respond to all users
-    - allowlist: Only respond to IDs in filter_ids list
-    - blocklist: Ignore IDs in filter_ids list, respond to everyone else
+    Filter modes (apply only to broadcast messages):
+    - none:      No filtering (default) - respond to all broadcast messages
+    - allowlist: Only respond to broadcast messages from IDs in filter_ids list
+    - blocklist: Ignore broadcast messages from IDs in filter_ids list
     
     Example configurations:
-    # Block specific troublemakers
+    # Block specific troublemakers from broadcast responses (they can still send direct messages)
     filter_mode = blocklist
     filter_ids = !deadbeef, AA:BB:CC:DD:EE:FF, 305419896
     
-    # Only respond to authorized users
+    # Only respond to broadcasts from authorized users (others can still send direct messages)
     filter_mode = allowlist  
     filter_ids = !12345678, !87654321, 10:20:30:40:50:60
 
 Author: Senior Software Engineer
 Date: February 2026
-Version: 0.12.0
+Version: 0.12.2
 """
 
-__version__ = "0.12.0"
+__version__ = "1.0.0"
 
 import sys
 import os
@@ -170,18 +171,26 @@ def _import_threading_libraries():
     except Exception as e:
         raise
 
+# Module-level constants
+CACHE_TIMEOUT_SECONDS = 300  # 5 minutes cache expiration for MQTT topics and user greetings
+MESSAGE_CHUNK_SIZE = 150  # Maximum characters per Meshtastic text message chunk
+MAX_ERRORS_PER_WINDOW = 50  # Maximum protobuf errors before requesting daemon restart
+ERROR_WINDOW_DURATION = 300  # Time window in seconds for tracking protobuf errors (5 minutes)
+LOG_PAYLOAD_PREVIEW_LENGTH = 50  # Characters to show in info log message previews
+DEBUG_PAYLOAD_PREVIEW_LENGTH = 100  # Characters to show in debug log message previews
+
 #
 #
 
-class MeshVMConfig:
+class MeshtaaConfig:
     """
-    Configuration manager for MeshVM daemon
+    Configuration manager for Meshtaa daemon
     
     Handles loading, parsing, and accessing configuration values from INI files.
     Provides defaults for all required settings and supports path expansion.
     """
     
-    def __init__(self, config_path: str = "/etc/meshvm/meshvm.conf"):
+    def __init__(self, config_path: str = "/etc/meshtaa/meshtaa.conf"):
         """Initialize configuration manager with config file path"""
         self.config_path = config_path
         self.config = configparser.ConfigParser()
@@ -216,11 +225,11 @@ class MeshVMConfig:
         self.config.set('mqtt', 'keepalive', '60')
         
         self.config.add_section('daemon')
-        self.config.set('daemon', 'log_file', '/var/log/meshvm.log')
+        self.config.set('daemon', 'log_file', '/var/log/meshtaa.log')
         self.config.set('daemon', 'log_level', 'INFO')
-        self.config.set('daemon', 'pid_file', '/var/run/meshvm.pid')
-        self.config.set('daemon', 'history_file', '/var/log/meshvm_history.md')
-        self.config.set('daemon', 'message_topic', 'meshvm/send')  # Topic for sending messages via MQTT
+        self.config.set('daemon', 'pid_file', '/var/run/meshtaa.pid')
+        self.config.set('daemon', 'history_file', '/var/log/meshtaa_history.md')
+        self.config.set('daemon', 'message_topic', 'meshtaa/send')  # Topic for sending messages via MQTT
         self.config.set('daemon', 'protobuf_resilience', 'true')  # Enhanced protobuf error handling
         self.config.set('daemon', 'greeting_format', 'Hello {node_id}! Welcome to the mesh network!')  # Greeting message format
         self.config.set('daemon', 'greeting_enabled', 'true')  # Enable/disable greeting new users
@@ -236,6 +245,97 @@ class MeshVMConfig:
         # Try to load from file
         if os.path.exists(self.config_path):
             self.config.read(self.config_path)
+        
+        # Validate configuration after loading
+        self.validate_config()
+    
+    def validate_config(self):
+        """
+        Validate required configuration values and fail fast on errors
+        
+        Checks for:
+        - Required fields (node_id, at least one keyword)
+        - Valid connection type and connection-specific requirements
+        - Path accessibility for log files
+        - Valid filter mode
+        
+        Raises:
+            ValueError: If required configuration is missing or invalid
+            FileNotFoundError: If required paths don't exist or aren't accessible
+        """
+        errors = []
+        
+        # Validate required node_id
+        node_id = self.get('meshtastic', 'node_id').strip()
+        if not node_id:
+            errors.append("Required field 'node_id' is missing from [meshtastic] section")
+        
+        # Validate connection type and connection-specific requirements
+        connection_type = self.get('meshtastic', 'connection_type').lower()
+        valid_connection_types = ['serial', 'network', 'bluetooth']
+        if connection_type not in valid_connection_types:
+            errors.append(f"Invalid connection_type '{connection_type}'. Must be one of: {', '.join(valid_connection_types)}")
+        
+        # Validate connection-specific requirements
+        if connection_type == 'serial':
+            serial_port = self.get('meshtastic', 'serial_port')
+            if not serial_port or not os.path.exists(serial_port):
+                errors.append(f"Serial port '{serial_port}' does not exist (connection_type=serial)")
+        elif connection_type == 'network':
+            network_url = self.get('meshtastic', 'network_url').strip()
+            if not network_url:
+                errors.append("Required field 'network_url' is missing when connection_type=network")
+            elif not (network_url.startswith('http://') or network_url.startswith('https://')):
+                errors.append(f"Invalid network_url '{network_url}'. Must start with http:// or https://")
+        elif connection_type == 'bluetooth':
+            bluetooth_mac = self.get('meshtastic', 'bluetooth_mac').strip()
+            if not bluetooth_mac:
+                errors.append("Required field 'bluetooth_mac' is missing when connection_type=bluetooth")
+            elif not re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', bluetooth_mac):
+                errors.append(f"Invalid bluetooth_mac '{bluetooth_mac}'. Must be in format XX:XX:XX:XX:XX:XX")
+        
+        # Validate at least one keyword is configured
+        keywords = self.get_keywords()
+        if not keywords:
+            errors.append("At least one keyword must be configured in [keywords] section")
+        
+        # Validate MQTT broker configuration
+        mqtt_broker = self.get('mqtt', 'broker').strip()
+        if not mqtt_broker:
+            errors.append("Required field 'broker' is missing from [mqtt] section")
+        
+        mqtt_port = self.getint('mqtt', 'port', 1883)
+        if not (1 <= mqtt_port <= 65535):
+            errors.append(f"Invalid MQTT port '{mqtt_port}'. Must be between 1 and 65535")
+        
+        # Validate filter mode
+        filter_mode = self.get('daemon', 'filter_mode', 'none').lower()
+        valid_filter_modes = ['none', 'allowlist', 'blocklist']
+        if filter_mode not in valid_filter_modes:
+            errors.append(f"Invalid filter_mode '{filter_mode}'. Must be one of: {', '.join(valid_filter_modes)}")
+        
+        # Validate log file path is writable
+        log_file = self.get('daemon', 'log_file')
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except PermissionError:
+                errors.append(f"Cannot create log directory '{log_dir}'. Check permissions")
+        
+        # Validate PID file directory is writable
+        pid_file = self.get('daemon', 'pid_file')
+        pid_dir = os.path.dirname(pid_file)
+        if pid_dir and not os.path.exists(pid_dir):
+            try:
+                os.makedirs(pid_dir, exist_ok=True)
+            except PermissionError:
+                errors.append(f"Cannot create PID directory '{pid_dir}'. Check permissions")
+        
+        # Raise exception with all validation errors if any found
+        if errors:
+            error_message = "Configuration validation failed:\\n" + "\\n".join(f"  - {error}" for error in errors)
+            raise ValueError(error_message)
     
     def get(self, section: str, option: str, fallback: str = '') -> str:
         """Get configuration value with fallback default"""
@@ -288,7 +388,7 @@ class MQTTManager:
     4. Automatically expire old cache entries
     """
     
-    def __init__(self, config: MeshVMConfig, logger: logging.Logger):
+    def __init__(self, config: MeshtaaConfig, logger: logging.Logger):
         """Initialize MQTT manager with configuration and logger"""
         self.config = config
         self.logger = logger
@@ -296,7 +396,7 @@ class MQTTManager:
         self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.connected = False
         self.topic_cache = {}  # Cache: {topic: {payload: str, timestamp: float}}
-        self.cache_timeout = 300  # Cache expiration: 5 minutes
+        self.cache_timeout = CACHE_TIMEOUT_SECONDS  # Cache expiration: 5 minutes
         self.message_callback = None  # Callback for message sending requests
         
         # Setup MQTT client callbacks for connection lifecycle
@@ -363,7 +463,7 @@ class MQTTManager:
                 self.logger.info(f"MQTT Subscribed - Topic: '{topic}', Keyword: '{keyword}', Result: {result}")
             
             # Subscribe to message sending topic
-            message_topic = self.config.get('daemon', 'message_topic', 'meshvm/send')
+            message_topic = self.config.get('daemon', 'message_topic', 'meshtaa/send')
             result, mid = client.subscribe(message_topic)
             self.logger.info(f"MQTT Subscribed - Message Topic: '{message_topic}', Result: {result}")
         else:
@@ -399,7 +499,7 @@ class MQTTManager:
         timestamp = time.time()
         
         # Check if this is a message sending request
-        message_topic = self.config.get('daemon', 'message_topic', 'meshvm/send')
+        message_topic = self.config.get('daemon', 'message_topic', 'meshtaa/send')
         if topic == message_topic:
             self._handle_message_request(payload)
             return
@@ -410,8 +510,8 @@ class MQTTManager:
             'timestamp': timestamp
         }
         
-        self.logger.info(f"MQTT Data Updated - Topic: '{topic}', Payload: '{payload[:50]}...', Cache size: {len(self.topic_cache)}")
-        self.logger.debug(f"MQTT Message Received - Server: {broker}:{port}, Topic: '{topic}', Payload: '{payload[:100]}...', Cache size: {len(self.topic_cache)}")
+        self.logger.info(f"MQTT Data Updated - Topic: '{topic}', Payload: '{payload[:LOG_PAYLOAD_PREVIEW_LENGTH]}...', Cache size: {len(self.topic_cache)}")
+        self.logger.debug(f"MQTT Message Received - Server: {broker}:{port}, Topic: '{topic}', Payload: '{payload[:DEBUG_PAYLOAD_PREVIEW_LENGTH]}...', Cache size: {len(self.topic_cache)}")
     
     def get_topic_data(self, topic: str) -> Optional[str]:
         """
@@ -513,11 +613,11 @@ class MQTTManager:
         
         MQTT Publishing Examples:
             # Direct message to specific node
-            mosquitto_pub -h broker.local -t "meshvm/send" \\
+            mosquitto_pub -h broker.local -t "meshtaa/send" \\
                          -m "10:20:BA:75:9C:D8@Hello from MQTT!"
             
             # Broadcast message to all nodes  
-            mosquitto_pub -h broker.local -t "meshvm/send" \\
+            mosquitto_pub -h broker.local -t "meshtaa/send" \\
                          -m "*@System update available"
         
         Args:
@@ -570,7 +670,7 @@ class MeshtasticMonitor:
     - Log all interactions to history file
     """
     
-    def __init__(self, config: MeshVMConfig, mqtt_manager: MQTTManager, logger: logging.Logger):
+    def __init__(self, config: MeshtaaConfig, mqtt_manager: MQTTManager, logger: logging.Logger):
         """Initialize Meshtastic monitor with dependencies"""
         self.config = config
         self.mqtt_manager = mqtt_manager
@@ -582,7 +682,7 @@ class MeshtasticMonitor:
         
         # New user greeting system
         self.greeted_users = {}  # Cache of greeted users {node_id: timestamp}
-        self.greeting_cache_duration = 300  # 5 minutes in seconds
+        self.greeting_cache_duration = CACHE_TIMEOUT_SECONDS  # 5 minutes in seconds
         
         # ID filtering system
         self.filter_mode = self.config.get('daemon', 'filter_mode', 'none').lower()  # none, allowlist, blocklist
@@ -591,8 +691,8 @@ class MeshtasticMonitor:
         # Protobuf error tracking for restart mechanism
         self.protobuf_error_count = 0  # Count of protobuf parsing errors
         self.error_window_start = time.time()  # Start of current error tracking window
-        self.error_window_duration = 300  # 5 minute window for error tracking
-        self.max_errors_per_window = 50  # Max errors before restart
+        self.error_window_duration = ERROR_WINDOW_DURATION  # 5 minute window for error tracking
+        self.max_errors_per_window = MAX_ERRORS_PER_WINDOW  # Max errors before restart
         self.restart_requested = False  # Flag to request daemon restart
         
         # Register callback for MQTT message sending requests
@@ -605,7 +705,7 @@ class MeshtasticMonitor:
         Creates history file if it doesn't exist with proper header.
         History file logs all message interactions for debugging and record-keeping.
         """
-        self.history_file = os.path.expanduser(self.config.get('daemon', 'history_file', '/var/log/meshvm_history.md'))
+        self.history_file = os.path.expanduser(self.config.get('daemon', 'history_file', '/var/log/meshtaa_history.md'))
         
         # Create history directory if it doesn't exist
         history_dir = Path(self.history_file).parent
@@ -614,7 +714,7 @@ class MeshtasticMonitor:
         # Create history file with header if it doesn't exist
         if not os.path.exists(self.history_file):
             with open(self.history_file, 'w') as f:
-                f.write(f"# MeshVM Chat History\n\n")
+                f.write(f"# Meshtaa Chat History\n\n")
                 f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Version: {__version__}\n\n")
         
@@ -650,6 +750,19 @@ class MeshtasticMonitor:
         except Exception as e:
             self.logger.error(f"Failed to log to history file: {e}")
     
+    @staticmethod
+    def _mac_last_four_hex(mac_clean: str) -> str:
+        """Extract the last 4 octets of a validated uppercase MAC address as a lowercase hex string.
+        
+        Args:
+            mac_clean: Uppercase MAC address with colons, already validated (e.g. 'CE:6E:13:A3:20:93')
+            
+        Returns:
+            str: Lowercase 8-hex-char string of last 4 octets (e.g. '13a32093')
+        """
+        octets = mac_clean.split(':')
+        return ''.join(octets[-4:]).lower()
+
     def _mac_to_node_id(self, mac_address):
         """Convert MAC address to Meshtastic node ID.
         
@@ -670,25 +783,16 @@ class MeshtasticMonitor:
         Raises:
             ValueError: If MAC address format is invalid
         """
-        # Remove any whitespace and convert to uppercase
         mac_clean = mac_address.replace(' ', '').upper()
         
-        # Handle broadcast addresses
         if mac_clean == '*' or mac_clean == 'FF:FF:FF:FF:FF:FF':
             self.logger.info(f"Converted broadcast address {mac_address} -> node_id: ^all")
             return "^all"
         
-        # Validate MAC address format
         if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', mac_clean):
             raise ValueError(f"Invalid MAC address format: {mac_address}")
         
-        # Split into octets and take the last 4
-        octets = mac_clean.split(':')
-        last_four = octets[-4:]
-        
-        # Join without colons and convert to lowercase
-        node_hex = ''.join(last_four).lower()
-        
+        node_hex = self._mac_last_four_hex(mac_clean)
         self.logger.info(f"Converted MAC {mac_address} -> node_id: !{node_hex}")
         return f"!{node_hex}"
     
@@ -716,9 +820,7 @@ class MeshtasticMonitor:
             
             # Handle MAC address format (AA:BB:CC:DD:EE:FF)
             if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', node_id):
-                octets = node_id.upper().split(':')
-                last_four = octets[-4:]
-                return ''.join(last_four).lower()
+                return self._mac_last_four_hex(node_id.upper())
             
             # Handle decimal format
             if node_id.isdigit():
@@ -971,8 +1073,6 @@ class MeshtasticMonitor:
             interface: Meshtastic interface instance (optional, provided by pubsub)
         """
 
-        self.logger.debug(f"xxx on_Received message")
-
         try:
             # Validate packet format
             if not isinstance(packet, dict):
@@ -1005,15 +1105,14 @@ class MeshtasticMonitor:
             if not is_for_us and not is_broadcast:
                 return  # Message not for us and not broadcast
             
-            # Apply ID filtering - check sender against filter list
+            # Apply ID filtering ONLY to broadcast messages - direct messages to us are always allowed
             sender_id_str = from_id_str if from_id_str else f'!{from_id:08x}'
-            if self._is_id_filtered(from_id, sender_id_str):
-                self.logger.debug(f"Message from {sender_id_str} filtered by {self.filter_mode} - ignoring")
-                return  # Sender is filtered out
+            if is_broadcast and self._is_id_filtered(from_id, sender_id_str):
+                self.logger.debug(f"Broadcast message from {sender_id_str} filtered by {self.filter_mode} - ignoring")
+                return  # Sender is filtered for broadcast messages
             
             # Extract message content
             decoded = packet.get('decoded', {})
-            self.logger.info(f"xxx Received yyy");
             if not decoded:
                 return
             
@@ -1027,8 +1126,7 @@ class MeshtasticMonitor:
             message_payload = decoded.get('payload')
             tmsg_payload    = decoded.get('text')
 
-            self.logger.debug(f"xxx Received message: {message_payload} {tmsg_payload}")
-            self.logger.info(f"xxx Received message: {message_payload} {tmsg_payload}")
+            self.logger.debug(f"Received message payload: {message_payload}")
 
             if not message_payload:
                 return
@@ -1148,6 +1246,45 @@ class MeshtasticMonitor:
         
         return None  # No keyword matched
     
+    @staticmethod
+    def _chunk_message(message: str) -> list:
+        """Split a message into Meshtastic-sized chunks.
+
+        If the message fits in a single chunk it is returned as-is.  For longer
+        messages the text is split and each part is prefixed with "(i/N) ".
+
+        The prefix length depends on N (e.g. "(1/9) " is 6 chars, "(10/99) "
+        is 8 chars).  Because adding a prefix reduces the usable space per
+        chunk, the actual number of chunks may be larger than the naive
+        estimate.  This method iterates until the chunk count stabilises so
+        the prefixes are always correct.
+
+        Args:
+            message: Text to split.
+
+        Returns:
+            list[str]: One or more message strings ready to transmit.
+        """
+        if not message:
+            return []
+
+        if len(message) <= MESSAGE_CHUNK_SIZE:
+            return [message]
+
+        # Iteratively determine the stable chunk count.
+        # Adding a prefix reduces chunk capacity which may push the count up by
+        # one.  In practice this converges in at most two iterations.
+        num_parts = 1
+        while True:
+            prefix_len = len(f"({num_parts}/{num_parts}) ")
+            chunk_size = MESSAGE_CHUNK_SIZE - prefix_len
+            raw_chunks = [message[i:i + chunk_size] for i in range(0, len(message), chunk_size)]
+            if len(raw_chunks) <= num_parts:
+                break
+            num_parts = len(raw_chunks)
+
+        return [f"({i + 1}/{len(raw_chunks)}) {chunk}" for i, chunk in enumerate(raw_chunks)]
+
     def _send_response(self, message: str, destination_id: str):
         """
         Send response message back to the original sender
@@ -1155,59 +1292,26 @@ class MeshtasticMonitor:
         Args:
             message: Response text to send
             destination_id: Node ID of recipient (hex string format like '!5691465b')
-            
-        Process:
-        1. Convert destination ID from string to integer format
-        2. Split message into chunks accounting for multi-part prefixes
-        3. Send messages using Meshtastic interface with delays between chunks
-        4. Log successful transmission
-        5. Handle and log any transmission errors
         """
         try:
             # Convert destination_id from string format back to int if needed
             if isinstance(destination_id, str) and destination_id.startswith('!'):
                 dest_id = int(destination_id[1:], 16)
             elif destination_id == '^all':
-                # Use broadcast node ID for mesh-wide broadcasts
                 dest_id = 0xFFFFFFFF  # Meshtastic broadcast node ID
             else:
                 dest_id = destination_id
-            
-            # First, determine if we need multi-part messages and calculate prefix length
-            # Estimate how many parts we'll need for proper prefix calculation
-            estimated_parts = (len(message) + 149) // 150  # Round up division
-            if estimated_parts > 1:
-                # Calculate prefix length: "(X/Y) " where X and Y are the part numbers
-                prefix_len = len(f"({estimated_parts}/{estimated_parts}) ")
-                max_chunk_size = 150 - prefix_len
-            else:
-                max_chunk_size = 150
-            
-            # Split message into properly sized chunks accounting for prefixes
-            chunks = []
-            remaining = message
-            while len(remaining) > max_chunk_size:
-                chunks.append(remaining[:max_chunk_size])
-                remaining = remaining[max_chunk_size:]
-            if remaining:
-                chunks.append(remaining)
-            
-            # Send each chunk with appropriate prefix
+
+            chunks = self._chunk_message(message)
+
             for i, chunk in enumerate(chunks):
-                if len(chunks) > 1:
-                    prefix = f"({i+1}/{len(chunks)}) "
-                    final_message = prefix + chunk
-                else:
-                    final_message = chunk
-                
-                self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {final_message}")
-                self.interface.sendText(final_message, destinationId=dest_id)
-                self.logger.info(f"Sent response to {destination_id}: {final_message}")
-                
-                # Add delay between messages to avoid overwhelming the mesh
+                self.logger.info(f"Sending response to {destination_id} (ID: {dest_id}): {chunk}")
+                self.interface.sendText(chunk, destinationId=dest_id)
+                self.logger.info(f"Sent response to {destination_id}: {chunk}")
+
                 if i < len(chunks) - 1:
                     time.sleep(5)
-                    
+
         except Exception as e:
             self.logger.error(f"Failed to send response: {e}")
     
@@ -1382,7 +1486,7 @@ class MeshtasticMonitor:
         return self.restart_requested
 
 
-class MeshVMDaemon:
+class MeshtaaDaemon:
     """
     Main daemon orchestrator - coordinates all components
     
@@ -1393,8 +1497,8 @@ class MeshVMDaemon:
     - Provide clean shutdown procedures
     
     Architecture:
-        MeshVMDaemon
-        ├── MeshVMConfig (configuration management)
+        MeshtaaDaemon
+        ├── MeshtaaConfig (configuration management)
         ├── MQTTManager (MQTT client & topic caching)
         └── MeshtasticMonitor (serial interface & message processing)
         
@@ -1406,9 +1510,9 @@ class MeshVMDaemon:
     5. Handle signals for graceful shutdown
     """
     
-    def __init__(self, config_path: str = "/etc/meshvm/meshvm.conf", foreground: bool = False):
+    def __init__(self, config_path: str = "/etc/meshtaa/meshtaa.conf", foreground: bool = False):
         """Initialize daemon with configuration file path and foreground mode flag"""
-        self.config = MeshVMConfig(config_path)
+        self.config = MeshtaaConfig(config_path)
         self.foreground = foreground
         self.logger = None  # Logger instance (initialized in setup_logging)
         self.mqtt_manager = None  # MQTTManager instance
@@ -1447,7 +1551,7 @@ class MeshVMDaemon:
             handlers=handlers
         )
         
-        self.logger = logging.getLogger('MeshVM')
+        self.logger = logging.getLogger('Meshtaa')
         self.logger.info("Logging initialized")
     
     def _signal_handler(self, signum, frame):
@@ -1549,7 +1653,7 @@ class MeshVMDaemon:
             _import_threading_libraries()
             
             self.setup_logging()
-            self.logger.info(f"Starting MeshVM daemon v{__version__}")
+            self.logger.info(f"Starting Meshtaa daemon v{__version__}")
             
             self.create_pid_file()
             
@@ -1564,7 +1668,7 @@ class MeshVMDaemon:
             self.meshtastic_monitor.connect()
             
             self.running = True
-            self.logger.info("MeshVM daemon started successfully")
+            self.logger.info("Meshtaa daemon started successfully")
             
             # Start monitoring in main thread with restart handling
             while self.running:
@@ -1656,7 +1760,7 @@ class MeshVMDaemon:
         """
         if self.running:
             if hasattr(self, 'logger') and self.logger:
-                self.logger.info("Stopping MeshVM daemon")
+                self.logger.info("Stopping Meshtaa daemon")
             self.running = False
             
             # Stop monitoring first to prevent new messages
@@ -1670,7 +1774,7 @@ class MeshVMDaemon:
             
             self.remove_pid_file()
             if hasattr(self, 'logger') and self.logger:
-                self.logger.info("MeshVM daemon stopped")
+                self.logger.info("Meshtaa daemon stopped")
 
 
 def main():
@@ -1694,14 +1798,14 @@ def main():
     import argparse
     
     # Setup command line argument parser
-    parser = argparse.ArgumentParser(description=f'MeshVM - Meshtastic Virtual Machine Daemon v{__version__}')
-    parser.add_argument('--config', '-c', default='/etc/meshvm/meshvm.conf',
+    parser = argparse.ArgumentParser(description=f'Meshtaa - Meshtastic Auto Answer Daemon v{__version__}')
+    parser.add_argument('--config', '-c', default='/etc/meshtaa/meshtaa.conf',
                        help='Configuration file path')
     parser.add_argument('--create-config', action='store_true',
                        help='Create sample configuration file and exit')
     parser.add_argument('--foreground', '-f', action='store_true',
                        help='Run in foreground (don\'t daemonize)')
-    parser.add_argument('--version', '-v', action='version', version=f'MeshVM v{__version__}')
+    parser.add_argument('--version', '-v', action='version', version=f'Meshtaa v{__version__}')
     
     args = parser.parse_args()
     
@@ -1711,14 +1815,14 @@ def main():
     
     # Handle configuration file creation mode
     if args.create_config:
-        config = MeshVMConfig(config_path)
+        config = MeshtaaConfig(config_path)
         config.create_sample_config()
         print(f"Sample configuration created at: {config_path}")
         print("Please edit the configuration file and set your node_id before running the daemon.")
         return 0
     
     # Validate configuration file exists and has required settings
-    config = MeshVMConfig(config_path)
+    config = MeshtaaConfig(config_path)
     if not config.get('meshtastic', 'node_id'):
         print("Error: node_id must be configured in the configuration file")
         print(f"Run with --create-config to create a sample configuration at {args.config}")
@@ -1762,7 +1866,7 @@ def main():
             os.dup2(devnull_w.fileno(), sys.stderr.fileno())
     
     # Now create the daemon object after daemonization is complete
-    daemon = MeshVMDaemon(config_path, foreground=args.foreground)
+    daemon = MeshtaaDaemon(config_path, foreground=args.foreground)
     
     try:
         daemon.start()

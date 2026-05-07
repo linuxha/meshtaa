@@ -3,7 +3,7 @@
 # Tests both broadcast and direct messaging functionality
 
 MQTT_BROKER="mozart.uucp"
-MESSAGE_TOPIC="meshvm/send"
+MESSAGE_TOPIC="meshtaa/send"
 
 echo "=== MeshVM Broadcast Message Test ==="
 echo "MQTT Broker: $MQTT_BROKER"
@@ -43,4 +43,4 @@ echo "To monitor messages in real-time, run:"
 echo "mosquitto_sub -h $MQTT_BROKER -t '$MESSAGE_TOPIC' -v"
 echo ""
 echo "To test with the actual MeshVM system:"
-echo "python3 meshvm.py -f -c test_config.conf"
+echo "python3 meshtaa.py -f -c test_config.conf"

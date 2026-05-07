@@ -43,19 +43,19 @@ keepalive = 60
 
 [daemon]
 # Log file location
-log_file = /var/log/meshvm.log
+log_file = /var/log/meshtaa.log
 
 # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 log_level = INFO
 
 # PID file location
-pid_file = /var/run/meshvm.pid
+pid_file = /var/run/meshtaa.pid
 
 # Chat history file location (Markdown format)
-history_file = /var/log/meshvm_history.md
+history_file = /var/log/meshtaa_history.md
 
 # MQTT topic for remote message sending (publish MAC@message format)
-message_topic = meshvm/send
+message_topic = meshtaa/send
 
 # Enhanced protobuf error handling for poor radio conditions
 protobuf_resilience = true
