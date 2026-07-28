@@ -12,9 +12,9 @@ The daemon:
 - Accepts message sending requests via MQTT for remote messaging
 
 Architecture:
-    Meshtastic Device <--> SerialInterface/TCPInterface/BLEInterface <--> MeshtasticMonitor
+    Meshtastic Device <--> SerialInterface/TCPInterface/BLEInterface <--> Meshtastic Monitor
                                                                                   |
-    MQTT Broker <--> MQTTManager <--> MeshtaaDaemon <----------------------------------+
+    MQTT Broker <--> MQTT Manager <--> Meshtaa Daemon <---------------------------+
                                            |
                                     Configuration
 
@@ -95,10 +95,10 @@ ID Filtering:
 
 Author: Senior Software Engineer
 Date: February 2026
-Version: 0.12.2
+Version: 1.1.0
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import sys
 import os
@@ -126,15 +126,15 @@ except ImportError as e:
     sys.exit(1)
 
 # Global variables for deferred imports (set after daemon fork)
-mqtt = None
-urllib3 = None
+mqtt            = None
+urllib3         = None
 SerialInterface = None
-TCPInterface = None
-BLEInterface = None
-mesh_pb2 = None
-portnums_pb2 = None
-meshtastic = None
-traceback = None
+TCPInterface    = None
+BLEInterface    = None
+mesh_pb2        = None
+portnums_pb2    = None
+meshtastic      = None
+traceback       = None
 
 def _import_threading_libraries():
     """
@@ -172,11 +172,11 @@ def _import_threading_libraries():
         raise
 
 # Module-level constants
-CACHE_TIMEOUT_SECONDS = 300  # 5 minutes cache expiration for MQTT topics and user greetings
-MESSAGE_CHUNK_SIZE = 150  # Maximum characters per Meshtastic text message chunk
-MAX_ERRORS_PER_WINDOW = 50  # Maximum protobuf errors before requesting daemon restart
-ERROR_WINDOW_DURATION = 300  # Time window in seconds for tracking protobuf errors (5 minutes)
-LOG_PAYLOAD_PREVIEW_LENGTH = 50  # Characters to show in info log message previews
+CACHE_TIMEOUT_SECONDS        = 300  # 5 minutes cache expiration for MQTT topics and user greetings
+MESSAGE_CHUNK_SIZE           = 150  # Maximum characters per Meshtastic text message chunk
+MAX_ERRORS_PER_WINDOW        = 50   # Maximum protobuf errors before requesting daemon restart
+ERROR_WINDOW_DURATION        = 300  # Time window in seconds for tracking protobuf errors (5 minutes)
+LOG_PAYLOAD_PREVIEW_LENGTH   = 50   # Characters to show in info log message previews
 DEBUG_PAYLOAD_PREVIEW_LENGTH = 100  # Characters to show in debug log message previews
 
 #
@@ -315,7 +315,7 @@ class MeshtaaConfig:
             errors.append(f"Invalid filter_mode '{filter_mode}'. Must be one of: {', '.join(valid_filter_modes)}")
         
         # Validate log file path is writable
-        log_file = self.get('daemon', 'log_file')
+        log_file = self.resolve_path(self.get('daemon', 'log_file'))
         log_dir = os.path.dirname(log_file)
         if log_dir and not os.path.exists(log_dir):
             try:
@@ -324,7 +324,7 @@ class MeshtaaConfig:
                 errors.append(f"Cannot create log directory '{log_dir}'. Check permissions")
         
         # Validate PID file directory is writable
-        pid_file = self.get('daemon', 'pid_file')
+        pid_file = self.resolve_path(self.get('daemon', 'pid_file'))
         pid_dir = os.path.dirname(pid_file)
         if pid_dir and not os.path.exists(pid_dir):
             try:
@@ -344,6 +344,14 @@ class MeshtaaConfig:
     def getint(self, section: str, option: str, fallback: int = 0) -> int:
         """Get configuration integer value with fallback default"""
         return self.config.getint(section, option, fallback=fallback)
+
+    def resolve_path(self, value: str) -> str:
+        """Resolve a config path relative to the configuration file location."""
+        expanded = os.path.expanduser(value)
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = Path(self.config_path).parent / path
+        return str(path.resolve(strict=False))
     
     def get_keywords(self) -> dict:
         """
@@ -705,7 +713,7 @@ class MeshtasticMonitor:
         Creates history file if it doesn't exist with proper header.
         History file logs all message interactions for debugging and record-keeping.
         """
-        self.history_file = os.path.expanduser(self.config.get('daemon', 'history_file', '/var/log/meshtaa_history.md'))
+        self.history_file = self.config.resolve_path(self.config.get('daemon', 'history_file', '/var/log/meshtaa_history.md'))
         
         # Create history directory if it doesn't exist
         history_dir = Path(self.history_file).parent
@@ -1530,7 +1538,7 @@ class MeshtaaDaemon:
         Creates log directory if needed and configures file logging always.
         Console logging is only enabled in foreground mode.
         """
-        log_file = os.path.expanduser(self.config.get('daemon', 'log_file'))
+        log_file = self.config.resolve_path(self.config.get('daemon', 'log_file'))
         log_level = self.config.get('daemon', 'log_level', 'INFO')
         
 
@@ -1573,6 +1581,7 @@ class MeshtaaDaemon:
             # First fork
             pid = os.fork()
             if pid > 0:
+                sys.stderr.write(f"First fork PID: {pid}\n")
                 sys.exit(0)  # Parent exits
         except OSError as e:
             sys.stderr.write(f"First fork failed: {e}\n")
@@ -1587,6 +1596,7 @@ class MeshtaaDaemon:
             # Second fork
             pid = os.fork()
             if pid > 0:
+                sys.stderr.write(f"Second fork PID: {pid}\n")
                 sys.exit(0)  # Second parent exits
         except OSError as e:
             sys.stderr.write(f"Second fork failed: {e}\n")
@@ -1610,7 +1620,7 @@ class MeshtaaDaemon:
         Creates directory if needed and writes current process ID to file.
         This allows system administrators to manage the daemon process.
         """
-        pid_file = os.path.expanduser(self.config.get('daemon', 'pid_file'))
+        pid_file = self.config.resolve_path(self.config.get('daemon', 'pid_file'))
         pid_dir = Path(pid_file).parent
         pid_dir.mkdir(parents=True, exist_ok=True)
         
@@ -1621,7 +1631,7 @@ class MeshtaaDaemon:
     
     def remove_pid_file(self):
         """Remove PID file during shutdown"""
-        pid_file = os.path.expanduser(self.config.get('daemon', 'pid_file'))
+        pid_file = self.config.resolve_path(self.config.get('daemon', 'pid_file'))
         try:
             os.unlink(pid_file)
             self.logger.info("PID file removed")
